@@ -14,7 +14,7 @@ use bindgen::library::*;
 use bindgen::rename::*;
 use bindgen::utilities::*;
 use bindgen::writer::*;
-use bindgen::mangle;
+use bindgen::dependency_graph::{Item, DependencyKind};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FunctionWriteMode {
@@ -53,42 +53,6 @@ impl Function {
         })
     }
 
-    pub fn add_member_function(&self, out: &mut MemberFunctions) {
-        if let Some(&(_, ref ty)) = self.args.get(0) {
-            match *ty {
-                Type::ConstPtr(ref t) | Type::Ptr(ref t) => {
-                    let t = match **t {
-                        Type::Path(ref p, ref g) => {
-                            Type::Path(mangle::mangle_path(p, g), Vec::new())
-                        }
-                        _ => return
-                    };
-                    out.entry(t)
-                        .or_insert_with(Vec::new)
-                        .push(self.clone())
-                }
-                _ => {}
-            }
-        }
-    }
-
-    pub fn add_deps(&self, library: &Library, out: &mut DependencyList) {
-        self.ret.add_deps(library, out);
-        for &(_, ref ty) in &self.args {
-            ty.add_deps(library, out);
-        }
-    }
-
-    pub fn add_monomorphs(&self, library: &Library,
-                          out: &mut Monomorphs,
-                          cycle_check: &mut CycleCheckList)
-    {
-        self.ret.add_monomorphs(library, out, cycle_check);
-        for &(_, ref ty) in &self.args {
-            ty.add_monomorphs(library, out, cycle_check);
-        }
-    }
-
     pub fn add_specializations(&self, library: &Library,
                                out: &mut SpecializationList,
                                cycle_check: &mut CycleCheckList)
@@ -112,11 +76,19 @@ impl Function {
         }
     }
 
-    pub fn mangle_paths(&mut self, monomorphs: &Monomorphs) {
-        self.ret.mangle_paths(monomorphs);
+    pub fn mangle_paths(&mut self) {
+        self.ret.mangle_paths();
         for &mut (_, ref mut ty) in &mut self.args {
-            ty.mangle_paths(monomorphs);
+            ty.mangle_paths();
         }
+    }
+
+    pub fn get_deps(&self, library: &Library) -> Vec<(Item, DependencyKind)> {
+        let mut ret = self.ret.get_items(library, DependencyKind::Normal);
+        for &(_, ref arg) in &self.args {
+            ret.extend_from_slice(&arg.get_items(library, DependencyKind::Normal));
+        }
+        ret
     }
 
     pub fn write_formated<F: Write>(&self,
@@ -124,6 +96,9 @@ impl Function {
                                     out: &mut SourceWriter<F>,
                                     mode: FunctionWriteMode)
     {
+        if self.extern_decl {
+            return;
+        }
         fn write_1<W: Write>(func: &Function,
                              config: &Config,
                              out: &mut SourceWriter<W>,

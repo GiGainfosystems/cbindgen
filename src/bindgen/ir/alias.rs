@@ -13,6 +13,7 @@ use bindgen::ir::*;
 use bindgen::library::*;
 use bindgen::utilities::*;
 use bindgen::writer::*;
+use bindgen::dependency_graph::{Item, DependencyKind};
 
 /// A type alias that generates a copy of its aliasee with a new name. If the type
 /// alias has generic values, it monomorphosizes its aliasee. This is useful for
@@ -113,7 +114,7 @@ impl Specialization {
                             name: self.name.clone(),
                             annotations: self.annotations.clone(),
                             fields: aliased.fields.iter()
-                                                  .map(|x| (x.0.clone(), x.1.specialize(&mappings), x.2.clone()))
+                                                  .map(|x| x.specialize(&mappings))
                                                   .collect(),
                             generic_params: self.generic_params.clone(),
                             documentation: aliased.documentation.clone(),
@@ -216,17 +217,6 @@ impl Typedef {
         }
     }
 
-    pub fn add_deps(&self, library: &Library, out: &mut DependencyList) {
-        self.aliased.add_deps(library, out);
-    }
-
-    pub fn add_monomorphs(&self, library: &Library,
-                          out: &mut Monomorphs,
-                          cycle_check: &mut CycleCheckList)
-    {
-        self.aliased.add_monomorphs(library, out, cycle_check);
-    }
-
     pub fn add_specializations(&self, library: &Library,
                                out: &mut SpecializationList,
                                cycle_check: &mut CycleCheckList)
@@ -234,8 +224,12 @@ impl Typedef {
         self.aliased.add_specializations(library, out, cycle_check);
     }
 
-    pub fn mangle_paths(&mut self, monomorphs: &Monomorphs) {
-        self.aliased.mangle_paths(monomorphs);
+    pub fn mangle_paths(&mut self) {
+        self.aliased.mangle_paths();
+    }
+
+    pub fn get_deps(&self, library: &Library) -> Vec<(Item, DependencyKind)> {
+        self.aliased.get_items(library, DependencyKind::Normal)
     }
 }
 

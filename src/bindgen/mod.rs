@@ -45,6 +45,7 @@ mod rename;
 mod rust_lib;
 mod utilities;
 mod writer;
+mod dependency_graph;
 
 pub use self::cargo::*;
 pub use self::config::*;

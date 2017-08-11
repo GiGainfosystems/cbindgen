@@ -91,7 +91,7 @@ impl<'a, F: Write> SourceWriter<'a, F> {
 
     pub fn push_tab(&mut self) {
         let spaces = self.spaces() -
-                     (self.spaces() % self.config.tab_width) + 
+                     (self.spaces() % self.config.tab_width) +
                      self.config.tab_width;
         self.spaces.push(spaces);
     }
@@ -152,23 +152,6 @@ impl<'a, F: Write> SourceWriter<'a, F> {
         write!(self.out, "{}", text).unwrap();
         self.line_length += text.len();
         self.max_line_length = cmp::max(self.max_line_length, self.line_length);
-    }
-
-    pub fn write_horizontal_source_list<'b, S: Source>(&mut self, items: &Vec<S>, list_type: ListType<'b>) {
-        for (i, ref item) in items.iter().enumerate() {
-            item.write(self.config, self);
-
-            match list_type {
-                ListType::Join(text) => {
-                    if i != items.len() - 1 {
-                        self.write(&text);
-                    }
-                }
-                ListType::Cap(text) => {
-                    self.write(&text);
-                }
-            }
-        }
     }
 
     pub fn write_vertical_list<'b>(&mut self, items: &Vec<String>, list_type: ListType<'b>) {

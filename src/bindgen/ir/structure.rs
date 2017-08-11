@@ -2,26 +2,50 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use std::collections::BTreeMap;
 use std::io::Write;
 use std::fmt::{Display, self};
 
 use syn;
 
 use bindgen::annotation::*;
+use bindgen::dependency_graph::{Item, DependencyKind};
 use bindgen::config::{Config, Language, Layout};
 use bindgen::ir::*;
 use bindgen::library::*;
-use bindgen::mangle::*;
 use bindgen::rename::*;
 use bindgen::utilities::*;
 use bindgen::writer::*;
+use bindgen::cdecl;
+use bindgen::mangle;
+
+#[derive(Debug, Clone)]
+pub struct StructField {
+    pub name: String,
+    pub tpe: Type,
+    pub doc: Documentation,
+}
+
+impl StructField {
+    pub fn specialize(&self, mappings: &[(&String, &Type)]) -> Self {
+        StructField {
+            tpe: self.tpe.specialize(mappings),
+            ..self.clone()
+        }
+    }
+}
+
+impl Source for StructField {
+    fn write<F: Write>(&self, config: &Config, out: &mut SourceWriter<F>) {
+        self.doc.write(config, out);
+        cdecl::write_field(out, &self.tpe, &self.name);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Struct {
     pub name: String,
     pub annotations: AnnotationSet,
-    pub fields: Vec<(String, Type, Documentation)>,
+    pub fields: Vec<StructField>,
     pub generic_params: Vec<String>,
     pub documentation: Documentation,
     pub functions: Vec<Function>,
@@ -44,14 +68,18 @@ impl Struct {
         let fields = match decl {
             &syn::VariantData::Struct(ref fields) => {
                 fields.iter()
-                      .try_skip_map(|x| x.as_ident_and_type())?
+                      .try_skip_map(|x| x.as_struct_field())?
             }
             &syn::VariantData::Tuple(ref fields) => {
                 let mut out = Vec::new();
                 let mut current = 0;
                 for field in fields {
-                    if let Some(x) = Type::load(&field.ty)? {
-                        out.push((format!("{}", current), x, Documentation::load(field.get_doc_attr())));
+                    if let Some(tpe) = Type::load(&field.ty)? {
+                        out.push(StructField{
+                            name: current.to_string(),
+                            tpe,
+                            doc: Documentation::load(field.get_doc_attr())
+                        });
                         current += 1;
                     }
                 }
@@ -86,59 +114,41 @@ impl Struct {
         }
     }
 
-    pub fn add_deps(&self, library: &Library, out: &mut DependencyList) {
-        for &(_, ref ty, _) in &self.fields {
-            ty.add_deps_with_generics(&self.generic_params, library, out);
+    pub fn get_deps(&self, library: &Library) -> Vec<(Item, DependencyKind)> {
+        let mut ret = Vec::new();
+        for f in &self.fields {
+            ret.extend_from_slice(&f.tpe.get_items(library, DependencyKind::Normal));
         }
-    }
-
-    pub fn add_monomorphs(&self, library: &Library,
-                          generic_values: &Vec<Type>,
-                          out: &mut Monomorphs,
-                          cycle_check: &mut CycleCheckList)
-    {
-        assert!(self.generic_params.len() == generic_values.len());
-
-        if self.generic_params.len() == 0 {
-            for &(_, ref ty, _) in &self.fields {
-                ty.add_monomorphs(library, out, cycle_check);
+        if library.config.structure.generate_member_functions {
+            for f in &library.functions {
+                if let Some(arg) = f.args.get(0) {
+                    match arg.1 {
+                        Type::Ptr(ref t) | Type::ConstPtr(ref t) => {
+                            match **t {
+                                Type::Path(ref p, ref g) => {
+                                    let name = mangle::mangle_path(p, g);
+                                    if name == self.name {
+                                        ret.push((Item::Function(f.clone()),
+                                                  DependencyKind::Ptr))
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
-            return;
         }
-
-        let mappings = self.generic_params.iter()
-                                          .zip(generic_values.iter())
-                                          .collect::<Vec<_>>();
-
-        let monomorph = Struct {
-            name: mangle_path(&self.name, generic_values),
-            annotations: self.annotations.clone(),
-            fields: self.fields.iter()
-                               .map(|x| (x.0.clone(), x.1.specialize(&mappings), x.2.clone()))
-                               .collect(),
-            generic_params: vec![],
-            documentation: self.documentation.clone(),
-            functions: vec![],
-            destructor: None,
-        };
-
-        for &(_, ref ty, _) in &monomorph.fields {
-            ty.add_monomorphs(library, out, cycle_check);
-        }
-
-        if !out.contains_key(&self.name) {
-            out.insert(self.name.clone(), BTreeMap::new());
-        }
-        out.get_mut(&self.name).unwrap().insert(generic_values.clone(),
-                                                Monomorph::Struct(monomorph));
+        ret
     }
 
     pub fn add_specializations(&self, library: &Library,
                                out: &mut SpecializationList,
                                cycle_check: &mut CycleCheckList)
     {
-        for &(_, ref ty, _) in &self.fields {
-            ty.add_specializations(library, out, cycle_check);
+        for &StructField{ ref tpe, .. } in &self.fields {
+            tpe.add_specializations(library, out, cycle_check);
         }
     }
 
@@ -147,24 +157,27 @@ impl Struct {
                      config.structure.rename_fields];
 
         if let Some(o) = self.annotations.list("field-names") {
-            let mut overriden_fields = Vec::new();
+            let mut overriden_fields = Vec::<StructField>::new();
 
-            for (i, &(ref name, ref ty, ref doc)) in self.fields.iter().enumerate() {
+            for (i, ref s) in self.fields.iter().enumerate() {
                 if i >= o.len() {
-                    overriden_fields.push((name.clone(), ty.clone(), doc.clone()));
+                    overriden_fields.push((*s).clone());
                 } else {
-                    overriden_fields.push((o[i].clone(), ty.clone(), doc.clone()));
+                    overriden_fields.push(StructField {
+                        name: o[i].clone(),
+                        ..(*s).clone()
+                    });
                 }
             }
 
             self.fields = overriden_fields;
         } else if let Some(r) = find_first_some(&rules) {
             self.fields = self.fields.iter()
-                                     .map(|x| (r.apply_to_snake_case(&x.0,
-                                                                     IdentifierType::StructMember),
-                                               x.1.clone(),
-                                               x.2.clone()))
-                                     .collect();
+                .map(|x| StructField {
+                    name: r.apply_to_snake_case(&x.name, IdentifierType::StructMember),
+                    ..x.clone()
+                })
+                .collect();
         }
 
         for f in &mut self.functions {
@@ -175,20 +188,22 @@ impl Struct {
         }
     }
 
-    pub fn mangle_paths(&mut self, monomorphs: &Monomorphs) {
-        for &mut (_, ref mut ty, _) in &mut self.fields {
-            ty.mangle_paths(monomorphs);
+    pub fn mangle_paths(&mut self) {
+        for &mut StructField{ ref mut tpe, ..} in &mut self.fields {
+            tpe.mangle_paths();
         }
         for f in &mut self.functions {
-            f.mangle_paths(monomorphs);
+            f.mangle_paths();
         }
         if let Some(ref mut destructor) = self.destructor {
-            destructor.mangle_paths(monomorphs);
+            destructor.mangle_paths();
         }
     }
 
     pub fn add_member_functions(&mut self, functions: Vec<Function>) {
+        println!("Struct {}", self.name);
         for function in functions {
+            println!("\tFunction {}", function.name);
             if function.annotations.bool("destructor").unwrap_or(false)
                 && self.destructor.is_none() && function.args.len() == 1 &&
                 function.ret == Type::Primitive(PrimitiveType::Void)
@@ -300,7 +315,8 @@ impl Source for Struct {
                 out.open_brace();
                 out.write("return ");
                 out.write_vertical_list(&self.fields.iter()
-                                                    .map(|x| format!("{} {} {}.{}", x.0, op, other, x.0))
+                                        .map(|x| format!("{0} {1} {2}.{0}",
+                                                         x.name, op, other))
                                                     .collect(),
                                         ListType::Join(&format!(" {}", conjuc)));
                 out.write(";");
@@ -308,27 +324,27 @@ impl Source for Struct {
             };
 
             if config.structure.derive_eq(&self.annotations) &&
-               !self.fields.is_empty() && self.fields.iter().all(|x| x.1.can_cmp_eq()) {
+               !self.fields.is_empty() && self.fields.iter().all(|x| x.tpe.can_cmp_eq()) {
                 emit_op("==", "&&");
             }
             if config.structure.derive_neq(&self.annotations) &&
-               !self.fields.is_empty() && self.fields.iter().all(|x| x.1.can_cmp_eq()) {
+               !self.fields.is_empty() && self.fields.iter().all(|x| x.tpe.can_cmp_eq()) {
                 emit_op("!=", "||");
             }
             if config.structure.derive_lt(&self.annotations) &&
-               self.fields.len() == 1 && self.fields[0].1.can_cmp_order() {
+               self.fields.len() == 1 && self.fields[0].tpe.can_cmp_order() {
                 emit_op("<", "&&");
             }
             if config.structure.derive_lte(&self.annotations) &&
-               self.fields.len() == 1 && self.fields[0].1.can_cmp_order() {
+               self.fields.len() == 1 && self.fields[0].tpe.can_cmp_order() {
                 emit_op("<=", "&&");
             }
             if config.structure.derive_gt(&self.annotations) &&
-               self.fields.len() == 1 && self.fields[0].1.can_cmp_order() {
+               self.fields.len() == 1 && self.fields[0].tpe.can_cmp_order() {
                 emit_op(">", "&&");
             }
             if config.structure.derive_gte(&self.annotations) &&
-               self.fields.len() == 1 && self.fields[0].1.can_cmp_order() {
+               self.fields.len() == 1 && self.fields[0].tpe.can_cmp_order() {
                 emit_op(">=", "&&");
             }
         }
@@ -378,16 +394,20 @@ fn format_function_call_2<W: Write>(f: &Function, out: &mut SourceWriter<W>) {
 }
 
 pub trait SynFieldHelpers {
-    fn as_ident_and_type(&self) -> Result<Option<(String, Type, Documentation)>, String>;
+    fn as_struct_field(&self) -> Result<Option<StructField>, String>;
 }
 
 impl SynFieldHelpers for syn::Field {
-    fn as_ident_and_type(&self) -> Result<Option<(String, Type, Documentation)>, String> {
+    fn as_struct_field(&self) -> Result<Option<StructField>, String> {
         let ident = self.ident.as_ref().ok_or(format!("field is missing identifier"))?.clone();
         let converted_ty = Type::load(&self.ty)?;
 
-        if let Some(x) = converted_ty {
-            Ok(Some((ident.to_string(), x, Documentation::load(self.get_doc_attr()))))
+        if let Some(tpe) = converted_ty {
+            Ok(Some(StructField{
+                name: ident.to_string(),
+                tpe,
+                doc: Documentation::load(self.get_doc_attr())
+            }))
         } else {
             Ok(None)
         }

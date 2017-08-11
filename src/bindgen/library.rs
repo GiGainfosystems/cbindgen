@@ -18,10 +18,11 @@ use bindgen::annotation::*;
 use bindgen::ir::*;
 use bindgen::rust_lib;
 use bindgen::utilities::*;
-use bindgen::writer::{ListType, Source, SourceWriter};
+use bindgen::writer::{Source, SourceWriter};
 
-use petgraph::{Graph, Direction};
-use petgraph::graph::{NodeIndex};
+
+use bindgen::dependency_graph::Item;
+pub use bindgen::dependency_graph::DependencyList;
 
 /// A path ref is used to reference a path value
 pub type PathRef = String;
@@ -47,21 +48,6 @@ impl PathValue {
         }
     }
 
-    pub fn add_deps(&self, library: &Library, out: &mut DependencyList) {
-        match self {
-            &PathValue::Struct(ref x) => {
-                x.add_deps(library, out);
-            },
-            &PathValue::Typedef(ref x) => {
-                x.add_deps(library, out);
-            },
-            &PathValue::Specialization(..) => {
-                unreachable!();
-            },
-            _ => { }
-        }
-    }
-
     pub fn add_specializations(&self, library: &Library,
                                out: &mut SpecializationList,
                                cycle_check: &mut CycleCheckList)
@@ -80,206 +66,9 @@ impl PathValue {
         }
     }
 
-    pub fn rename_fields(&mut self, config: &Config) {
-        match self {
-            &mut PathValue::Enum(ref mut x) => { x.rename_fields(config); },
-            &mut PathValue::Struct(ref mut x) => { x.rename_fields(config); },
-            _ => { },
-        }
-    }
-
-    pub fn mangle_paths(&mut self, monomorphs: &Monomorphs) {
-        match self {
-            &mut PathValue::Enum(_) => { },
-            &mut PathValue::Struct(ref mut x) => {
-                x.mangle_paths(monomorphs);
-            },
-            &mut PathValue::OpaqueItem(_) => { },
-            &mut PathValue::Typedef(ref mut x) => {
-                x.mangle_paths(monomorphs);
-            },
-            &mut PathValue::Specialization(..) => {
-                unreachable!();
-            },
-        }
-    }
 }
 
-#[derive(Clone, Debug)]
-pub enum Monomorph {
-    Struct(Struct),
-    OpaqueItem(OpaqueItem),
-}
-
-impl Monomorph {
-    pub fn name(&self) -> &str {
-        match self {
-            &Monomorph::Struct(ref x) => &x.name,
-            &Monomorph::OpaqueItem(ref x) => &x.name,
-        }
-    }
-
-    pub fn is_opaque(&self) -> bool {
-        match self {
-            &Monomorph::Struct(_) => false,
-            &Monomorph::OpaqueItem(_) => true,
-        }
-    }
-}
-
-pub type MonomorphList = BTreeMap<Vec<Type>, Monomorph>;
-pub type Monomorphs = BTreeMap<PathRef, MonomorphList>;
-pub type MemberFunctions = BTreeMap<Type, Vec<Function>>;
 pub type CycleCheckList = HashSet<Type>;
-
-/// A dependency list is used for gathering what order to output the types.
-pub struct DependencyList {
-    pub lookup: HashSet<PathRef>,
-    pub items: Vec<PathValue>,
-}
-
-impl DependencyList {
-    fn new() -> DependencyList {
-        DependencyList {
-            lookup: HashSet::new(),
-            items: Vec::new(),
-        }
-    }
-
-    fn calculate_order(self, monomorphs: &Monomorphs, library: &Library) -> Vec<PathValue> {
-        let mut enums = Vec::new();
-        let mut opaque = Vec::new();
-        let mut type_def = Vec::new();
-        let mut specialization = Vec::new();
-
-        // We use i8 as edge weight because it implements display
-        let mut graph = Graph::<Struct, i8>::new();
-        let mut lookup = HashMap::<PathRef, NodeIndex>::new();
-
-        // Add all monomorphs of a all useded items to our dependency graph
-        for item in self.items.into_iter() {
-            match item {
-                e @ PathValue::Enum(_) => enums.push(e),
-                t @ PathValue::Typedef(_) => type_def.push(t),
-                s @ PathValue::Specialization(_) => specialization.push(s),
-                PathValue::OpaqueItem(o) => {
-                    if let Some(m) = monomorphs.get(&o.name) {
-                        for (_, monomorph) in m {
-                            match *monomorph {
-                                Monomorph::Struct(ref s) => {
-                                    let idx = graph.add_node(s.clone());
-                                    lookup.insert(s.name.clone(), idx);
-                                }
-                                Monomorph::OpaqueItem(ref o) => {
-                                    opaque.push(PathValue::OpaqueItem(o.clone()))
-                                }
-                            }
-                        }
-                    } else {
-                        opaque.push(PathValue::OpaqueItem(o))
-                    }
-                },
-                PathValue::Struct(s) => {
-                    if let Some(m) = monomorphs.get(&s.name){
-                        for (_, monomorph) in m {
-                            match *monomorph {
-                                Monomorph::Struct(ref s) => {
-                                    let idx = graph.add_node(s.clone());
-                                    lookup.insert(s.name.clone(), idx);
-                                }
-                                Monomorph::OpaqueItem(ref o) => {
-                                    opaque.push(PathValue::OpaqueItem(o.clone()))
-                                },
-                            }
-                        }
-                    } else {
-                        let name = s.name.clone();
-                        let idx = graph.add_node(s);
-                        lookup.insert(name, idx);
-                    }
-                }
-            }
-        }
-
-        // For each node add all dependendcies
-        // This is done by simply go through all struct fields and add each type
-        // as dependency/edge to the graph
-        for id in graph.node_indices() {
-            let fields = &graph.node_weight(id)
-                .expect("Must be there because we get the id's above")
-                .fields.clone();
-            for &(_, ref ty, _) in fields {
-                let iter = ty.lookup(library).into_iter().filter_map(|t| {
-                    match t {
-                        PathValue::Struct(ref s) if s.generic_params.is_empty() => {
-                            Some(s.name.clone())
-                        },
-                        PathValue::Struct(ref s) if monomorphs.get(&s.name).is_some() => {
-                            let monomorphs = monomorphs.get(&s.name).expect("Checked it's there above");
-                            ty.resolve_monomorphed_type(monomorphs)
-                        },
-                        PathValue::Struct(_) => unreachable!(),
-                        _ => None,
-                    }
-                });
-                for dep in iter {
-                    if let Some(to_id) = lookup.get(&dep) {
-                        graph.add_edge(id, *to_id, 0);
-                    } else {
-                        panic!("Type {} not found", dep);
-                    }
-                }
-            }
-        }
-        // Debug output
-        use petgraph::dot::Dot;
-        println!("{}", Dot::new(&graph));
-
-        let mut structs = Vec::new();
-        // loop over the graph till there are no elements left
-        while graph.node_count() > 0 {
-            // find structs without any dependency
-            let externals = graph.externals(Direction::Outgoing).collect::<Vec<_>>();
-            if externals.is_empty() {
-                // there is a cyclic graph left, so we add a struct as opaque
-                // item and remove some edge from the dependceny graph
-                if let Some(id) = graph.node_indices().next() {
-                    {
-                        let node = graph.node_weight(id)
-                            .expect("We got the id from the graph");
-                        opaque.push(PathValue::OpaqueItem(node.as_opaque()));
-                    }
-                    let n =  graph.neighbors_directed(id, Direction::Outgoing)
-                        .next()
-                        .expect("It's a cyclic graph, so this must be there");
-                    let e = graph.find_edge(n, id)
-                        .expect("It's a cyclic graph, so this must be there");
-
-                    graph.remove_edge(e);
-                } else {
-                    // No nodes left?
-                    // can this happen?
-                    break;
-                }
-            } else {
-                // Iterate over all nodes without dependency
-                // 1. Remove them from the graph
-                // 2. Push them to the orderd struct list
-                for idx in externals {
-                    if let Some(s) = graph.remove_node(idx){
-                        structs.push(PathValue::Struct(s));
-                    }
-                }
-            }
-        }
-
-        enums.extend_from_slice(&opaque);
-        enums.extend_from_slice(&structs);
-        enums.extend_from_slice(&type_def);
-        assert!(specialization.is_empty());
-        enums
-    }
-}
 
 /// A specialization list is used for gathering what order to output the types.
 pub struct SpecializationList {
@@ -302,14 +91,14 @@ impl SpecializationList {
 #[derive(Debug, Clone)]
 pub struct Library {
     bindings_crate_name: String,
-    config: Config,
+    pub(crate) config: Config,
 
     enums: BTreeMap<String, Enum>,
     structs: BTreeMap<String, Struct>,
     opaque_items: BTreeMap<String, OpaqueItem>,
     typedefs: BTreeMap<String, Typedef>,
     specializations: BTreeMap<String, Specialization>,
-    functions: BTreeMap<String, Function>,
+    pub(crate) functions: Vec<Function>,
 }
 
 impl Library {
@@ -323,7 +112,7 @@ impl Library {
             opaque_items: BTreeMap::new(),
             typedefs: BTreeMap::new(),
             specializations: BTreeMap::new(),
-            functions: BTreeMap::new(),
+            functions: Vec::new(),
         }
     }
 
@@ -453,7 +242,7 @@ impl Library {
                         Ok(func) => {
                             info!("take {}::{}", crate_name, &foreign_item.ident);
 
-                            self.functions.insert(func.name.clone(), func);
+                            self.functions.push(func);
                         }
                         Err(msg) => {
                             error!("Cannot use fn {}::{} ({})",
@@ -498,7 +287,7 @@ impl Library {
                 Ok(func) => {
                     info!("take {}::{}", crate_name, &item.ident);
 
-                    self.functions.insert(func.name.clone(), func);
+                    self.functions.push(func);
                 }
                 Err(msg) => {
                     error!("cannot use fn {}::{} ({})",
@@ -693,7 +482,7 @@ impl Library {
         // that are left behind
         let mut specializations = SpecializationList::new();
         let mut cycle_check_list = CycleCheckList::new();
-        for (_, function) in &self.functions {
+        for function in &self.functions {
             function.add_specializations(&self,
                                          &mut specializations,
                                          &mut cycle_check_list);
@@ -778,87 +567,10 @@ impl Library {
             }
         }
 
+
         // Gather only the items that we need for this
         // `extern "c"` interface
-        let mut deps = DependencyList::new();
-        let mut member_functions = MemberFunctions::new();
-        for (_, function) in &self.functions {
-            function.add_deps(&self, &mut deps);
-            function.add_member_function(&mut member_functions);
-        }
-
-        // Gather a list of all the instantiations of generic structs
-        let mut monomorphs = Monomorphs::new();
-        let mut cycle_check_list = CycleCheckList::new();
-        for (_, function) in &self.functions {
-            function.add_monomorphs(&self, &mut monomorphs, &mut cycle_check_list);
-        }
-        result.items = deps.calculate_order(&monomorphs, &self);
-
-        // Collect all possible member fucntions
-        if self.config.language == Language::Cxx && self.config.structure.generate_member_functions {
-            let items = ::std::mem::replace(&mut result.items, Vec::new());
-            for item in items {
-                match item {
-                    PathValue::Struct(mut s) => {
-                        let ty = Type::Path(s.name.clone(), Vec::new());
-                        if let Some(functions) = member_functions.remove(&ty) {
-                            let opaque = s.as_opaque();
-                            result.items.push(PathValue::OpaqueItem(opaque));
-                            s.add_member_functions(functions);
-                            result.member_function_structs.push(s);
-                        } else {
-                            result.items.push(PathValue::Struct(s));
-                        }
-                    }
-                    other => result.items.push(other),
-                }
-            }
-        }
-
-        result.functions = self.functions.iter()
-                                         .map(|(_, function)| function.clone())
-                                         .collect::<Vec<_>>();
-
-        // Rename all the fields according to their rules and mangle any
-        // paths that refer to generic structs that have been monomorphed.
-        for item in &mut result.items {
-            item.mangle_paths(&monomorphs);
-            item.rename_fields(&self.config);
-        }
-
-        for item in &mut result.member_function_structs {
-            item.mangle_paths(&monomorphs);
-            item.rename_fields(&self.config);
-        }
-
-        // Rename all the arguments according to their rules and mangle any
-        // paths that refer to generic structs that have been monomorph'ed.
-        for func in &mut result.functions {
-            func.mangle_paths(&monomorphs);
-            func.rename_args(&self.config);
-        }
-
-        // The bindings writing code uses information about the monomorphs
-        // to write out utility template specializations. We ideally should
-        // send a different data structure. Currently we reuse the existing one,
-        // but unfortunately the generic values have types that are not
-        // mangled and need to be. So we build a copy and mangle along the way.
-        // TODO
-        let mut new_monomorphs = Monomorphs::new();
-        for (path, monomorph_set) in monomorphs.iter() {
-            let mut new_monomorph_set = BTreeMap::new();
-            for (generic_values, monomorph) in monomorph_set.iter() {
-                let mut new_generic_values = generic_values.clone();
-                for generic_value in &mut new_generic_values {
-                    generic_value.mangle_paths(&monomorphs);
-                }
-                new_monomorph_set.insert(new_generic_values, monomorph.clone());
-            }
-            new_monomorphs.insert(path.clone(), new_monomorph_set);
-        }
-        result.monomorphs = new_monomorphs;
-
+        result.items = DependencyList::new(&self.functions, &self).calculate_order();
         Ok(result)
     }
 }
@@ -867,21 +579,21 @@ impl Library {
 #[derive(Debug, Clone)]
 pub struct GeneratedBindings {
     config: Config,
-
-    monomorphs: Monomorphs,
-    items: Vec<PathValue>,
-    functions: Vec<Function>,
-    member_function_structs: Vec<Struct>,
+    items: Vec<Item>,
+    // monomorphs: Monomorphs,
+    // items: Vec<PathValue>,
+    // functions: Vec<Function>,
+    // member_function_structs: Vec<Struct>,
 }
 
 impl GeneratedBindings {
     fn blank(config: &Config) -> GeneratedBindings {
         GeneratedBindings {
             config: config.clone(),
-            monomorphs: Monomorphs::new(),
+            // monomorphs: Monomorphs::new(),
             items: Vec::new(),
-            functions: Vec::new(),
-            member_function_structs: Vec::new(),
+            // functions: Vec::new(),
+            // member_function_structs: Vec::new(),
         }
     }
 
@@ -961,48 +673,16 @@ impl GeneratedBindings {
             }
         }
 
-        for item in &self.items {
-            out.new_line_if_not_start();
-            match item {
-                &PathValue::Enum(ref x) => x.write(&self.config, &mut out),
-                &PathValue::Struct(ref x) => x.write(&self.config, &mut out),
-                &PathValue::OpaqueItem(ref x) => x.write(&self.config, &mut out),
-                &PathValue::Typedef(ref x) => x.write(&self.config, &mut out),
-                &PathValue::Specialization(_) => {
-                    unreachable!("should not encounter a specialization in a generated library")
-                }
-            }
-            out.new_line();
-        }
-
         if let Some(ref f) = self.config.autogen_warning {
             out.new_line_if_not_start();
             out.write(&f);
             out.new_line();
         }
 
-        for function in &self.functions {
-            if function.extern_decl {
-                continue;
-            }
-
+        for item in &self.items {
             out.new_line_if_not_start();
-            function.write(&self.config, &mut out);
+            item.write(&self.config, &mut out);
             out.new_line();
-        }
-
-        if self.config.language == Language::Cxx {
-            out.new_line();
-            let mut first = true;
-            for full_object in &self.member_function_structs {
-                if first {
-                    first = false;
-                } else {
-                    out.new_line();
-                }
-                full_object.write(&self.config, &mut out);
-                out.new_line();
-            }
         }
 
         if self.config.language == Language::Cxx {
@@ -1032,102 +712,102 @@ impl GeneratedBindings {
             out.new_line();
         }
 
-        if self.config.structure.generic_template_specialization &&
-            self.config.language == Language::Cxx &&
-            !self.monomorphs.is_empty()
-        {
-            let mut wrote_namespace: bool = false;
-            if let Some(ref namespace) = self.config.namespace {
-                wrote_namespace = true;
+        // if self.config.structure.generic_template_specialization &&
+        //     self.config.language == Language::Cxx &&
+        //     !self.monomorphs.is_empty()
+        // {
+        //     let mut wrote_namespace: bool = false;
+        //     if let Some(ref namespace) = self.config.namespace {
+        //         wrote_namespace = true;
 
-                out.new_line();
-                out.write("namespace ");
-                out.write(namespace);
-                out.write(" {");
-            }
-            if let Some(ref namespaces) = self.config.namespaces {
-                wrote_namespace = true;
-                for namespace in namespaces {
-                    out.new_line();
-                    out.write("namespace ");
-                    out.write(namespace);
-                    out.write(" {");
-                }
-            }
-            if wrote_namespace {
-                out.new_line();
-            }
-            let mut specialization = Vec::new();
-            for (path, monomorph_sets) in &self.monomorphs {
-                if monomorph_sets.len() == 0 {
-                    continue;
-                }
+        //         out.new_line();
+        //         out.write("namespace ");
+        //         out.write(namespace);
+        //         out.write(" {");
+        //     }
+        //     if let Some(ref namespaces) = self.config.namespaces {
+        //         wrote_namespace = true;
+        //         for namespace in namespaces {
+        //             out.new_line();
+        //             out.write("namespace ");
+        //             out.write(namespace);
+        //             out.write(" {");
+        //         }
+        //     }
+        //     if wrote_namespace {
+        //         out.new_line();
+        //     }
+        //     let mut specialization = Vec::new();
+        //     for (path, monomorph_sets) in &self.monomorphs {
+        //         if monomorph_sets.len() == 0 {
+        //             continue;
+        //         }
 
-                // TODO
-                let is_opaque = monomorph_sets.iter().next().unwrap().1.is_opaque();
-                let generics_count = monomorph_sets.iter().next().unwrap().0.len();
-                let generics_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-                                      "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
+        //         // TODO
+        //         let is_opaque = monomorph_sets.iter().next().unwrap().1.is_opaque();
+        //         let generics_count = monomorph_sets.iter().next().unwrap().0.len();
+        //         let generics_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+        //                               "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
 
-                if is_opaque || generics_count > 26 {
-                    continue;
-                }
+        //         if is_opaque || generics_count > 26 {
+        //             continue;
+        //         }
 
-                out.new_line_if_not_start();
-                out.write("template<");
-                for i in 0..generics_count {
-                    if i != 0 {
-                        out.write(", ")
-                    }
-                    out.write("typename ");
-                    out.write(generics_names[i]);
-                }
-                out.write(">");
-                out.new_line();
-                out.write(&format!("struct {}", path));
-                out.open_brace();
-                out.close_brace(true);
-                out.new_line();
-                // Collect all specializations and print them after theall generic versions are generated
-                // This is needed because the specilizations could have dependencies to each other
-                specialization.push((path, monomorph_sets));
-            }
+        //         out.new_line_if_not_start();
+        //         out.write("template<");
+        //         for i in 0..generics_count {
+        //             if i != 0 {
+        //                 out.write(", ")
+        //             }
+        //             out.write("typename ");
+        //             out.write(generics_names[i]);
+        //         }
+        //         out.write(">");
+        //         out.new_line();
+        //         out.write(&format!("struct {}", path));
+        //         out.open_brace();
+        //         out.close_brace(true);
+        //         out.new_line();
+        //         // Collect all specializations and print them after theall generic versions are generated
+        //         // This is needed because the specilizations could have dependencies to each other
+        //         specialization.push((path, monomorph_sets));
+        //     }
 
-            for (path, monomorph_sets) in specialization {
-                for (generic_values, monomorph) in monomorph_sets {
-                    out.new_line();
-                    out.write("template<>");
-                    out.new_line();
-                    out.write(&format!("struct {}<", path));
-                    out.write_horizontal_source_list(generic_values, ListType::Join(", "));
-                    out.write(&format!("> : public {}", monomorph.name()));
-                    out.open_brace();
-                    out.close_brace(true);
-                    out.new_line();
-                }
-            }
+        //     for (path, monomorph_sets) in specialization {
+        //         for (generic_values, monomorph) in monomorph_sets {
+        //             out.new_line();
+        //             out.write("template<>");
+        //             out.new_line();
+        //             out.write(&format!("struct {}<", path));
+        //             out.write_horizontal_source_list(generic_values, ListType::Join(", "));
+        //             out.write(&format!("> : public {}", monomorph.name()));
+        //             out.open_brace();
+        //             out.close_brace(true);
+        //             out.new_line();
+        //         }
+        //     }
 
-            let mut wrote_namespace: bool = false;
-            if let Some(ref namespaces) = self.config.namespaces {
-                wrote_namespace = true;
+        //     let mut wrote_namespace: bool = false;
+        //     if let Some(ref namespaces) = self.config.namespaces {
+        //         wrote_namespace = true;
 
-                for namespace in namespaces.iter().rev() {
-                    out.new_line_if_not_start();
-                    out.write("} // namespace ");
-                    out.write(namespace);
-                }
-            }
-            if let Some(ref namespace) = self.config.namespace {
-                wrote_namespace = true;
+        //         for namespace in namespaces.iter().rev() {
+        //             out.new_line_if_not_start();
+        //             out.write("} // namespace ");
+        //             out.write(namespace);
+        //         }
+        //     }
+        //     if let Some(ref namespace) = self.config.namespace {
+        //         wrote_namespace = true;
 
-                out.new_line_if_not_start();
-                out.write("} // namespace ");
-                out.write(namespace);
-            }
-            if wrote_namespace {
-                out.new_line();
-            }
-        }
+        //         out.new_line_if_not_start();
+        //         out.write("} // namespace ");
+        //         out.write(namespace);
+        //     }
+        //     if wrote_namespace {
+        //         out.new_line();
+        //     }
+        // }
 
         if self.config.language == Language::Cxx {
             out.new_line_if_not_start();

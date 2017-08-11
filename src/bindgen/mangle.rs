@@ -5,7 +5,7 @@
 use bindgen::ir::*;
 
 pub fn mangle_path(name: &str, generic_values: &[Type]) -> String {
-    assert!(!name.contains("_"));
+    assert!(generic_values.is_empty() || !name.contains("_"));
 
     let mut out = String::from(name);
     if !generic_values.is_empty() {
