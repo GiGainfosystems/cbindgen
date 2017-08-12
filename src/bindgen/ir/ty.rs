@@ -302,50 +302,6 @@ impl Type {
         }
     }
 
-    pub fn add_specializations(&self, library: &Library,
-                               out: &mut SpecializationList,
-                               cycle_check: &mut CycleCheckList)
-    {
-        if !cycle_check.contains(self) {
-            cycle_check.insert(self.clone());
-            match self {
-                &Type::ConstPtr(ref ty) => {
-                    ty.add_specializations(library, out, cycle_check);
-                }
-                &Type::Ptr(ref ty) => {
-                    ty.add_specializations(library, out, cycle_check);
-                }
-                &Type::Path(ref path, ref generic_values) => {
-                    if let Some(item) = library.resolve_path(path) {
-                        match item {
-                            PathValue::Struct(ref x) => {
-                                x.add_specializations(library, out, cycle_check);
-                            }
-                            PathValue::Typedef(ref x) => {
-                                assert!(generic_values.len() == 0);
-                                x.add_specializations(library, out, cycle_check);
-                            }
-                            PathValue::Specialization(ref x) => {
-                                x.add_specializations(library, out, cycle_check);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                &Type::Primitive(_) => {}
-                &Type::Array(ref ty, _) => {
-                    ty.add_specializations(library, out, cycle_check);
-                }
-                &Type::FuncPtr(ref ret, ref args) => {
-                    ret.add_specializations(library, out, cycle_check);
-                    for arg in args {
-                        arg.add_specializations(library, out, cycle_check);
-                    }
-                }
-            }
-        }
-    }
-
     pub fn mangle_paths(&mut self) {
         match self {
             &mut Type::ConstPtr(ref mut ty) => {
@@ -413,7 +369,6 @@ impl Type {
                         }
                         PathValue::Typedef(t) => Item::Typedef(t),
                         PathValue::OpaqueItem(o) => Item::Opaque(o),
-                        PathValue::Specialization(_) => unreachable!()
                     };
                     vec![(item, kind)]
                 } else {

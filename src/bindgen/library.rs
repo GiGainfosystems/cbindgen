@@ -3,9 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use std::io::Write;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::path;
 use std::fs;
@@ -34,57 +32,6 @@ pub enum PathValue {
     Struct(Struct),
     OpaqueItem(OpaqueItem),
     Typedef(Typedef),
-    Specialization(Specialization),
-}
-
-impl PathValue {
-    pub fn name(&self) -> &str {
-        match self {
-            &PathValue::Enum(ref x) => { &x.name },
-            &PathValue::Struct(ref x) => { &x.name },
-            &PathValue::OpaqueItem(ref x) => { &x.name },
-            &PathValue::Typedef(ref x) => { &x.name },
-            &PathValue::Specialization(ref x) => { &x.name },
-        }
-    }
-
-    pub fn add_specializations(&self, library: &Library,
-                               out: &mut SpecializationList,
-                               cycle_check: &mut CycleCheckList)
-    {
-        match self {
-            &PathValue::Struct(ref x) => {
-                x.add_specializations(library, out, cycle_check);
-            }
-            &PathValue::Typedef(ref x) => {
-                x.add_specializations(library, out, cycle_check);
-            }
-            &PathValue::Specialization(ref x) => {
-                x.add_specializations(library, out, cycle_check);
-            }
-            _ => {}
-        }
-    }
-
-}
-
-pub type CycleCheckList = HashSet<Type>;
-
-/// A specialization list is used for gathering what order to output the types.
-pub struct SpecializationList {
-    pub order: Vec<PathValue>,
-    pub items: HashSet<PathRef>,
-    pub errors: Vec<(String, String)>,
-}
-
-impl SpecializationList {
-    fn new() -> SpecializationList {
-        SpecializationList {
-            order: Vec::new(),
-            items: HashSet::new(),
-            errors: Vec::new(),
-        }
-    }
 }
 
 /// A library contains all of the information needed to generate bindings for a rust library.
@@ -467,9 +414,6 @@ impl Library {
         if let Some(x) = self.typedefs.get(p) {
             return Some(PathValue::Typedef(x.clone()));
         }
-        if let Some(x) = self.specializations.get(p) {
-            return Some(PathValue::Specialization(x.clone()));
-        }
 
         None
     }
@@ -480,38 +424,38 @@ impl Library {
 
         // Specialize types into new types and remove all the specializations
         // that are left behind
-        let mut specializations = SpecializationList::new();
-        let mut cycle_check_list = CycleCheckList::new();
-        for function in &self.functions {
-            function.add_specializations(&self,
-                                         &mut specializations,
-                                         &mut cycle_check_list);
-        }
-        self.specializations.clear();
+        // let mut specializations = SpecializationList::new();
+        // let mut cycle_check_list = CycleCheckList::new();
+        // for function in &self.functions {
+        //     function.add_specializations(&self,
+        //                                  &mut specializations,
+        //                                  &mut cycle_check_list);
+        // }
+        // self.specializations.clear();
 
-        for specialization in specializations.order {
-            let name = specialization.name().to_owned();
-            match specialization {
-                PathValue::Struct(x) => {
-                    self.structs.insert(name, x);
-                }
-                PathValue::OpaqueItem(x) => {
-                    self.opaque_items.insert(name, x);
-                }
-                PathValue::Enum(x) => {
-                    self.enums.insert(name, x);
-                }
-                PathValue::Typedef(x) => {
-                    self.typedefs.insert(name, x);
-                }
-                PathValue::Specialization(..) => {
-                    unreachable!();
-                }
-            }
-        }
-        for (path, error) in specializations.errors {
-            warn!("specializing {} failed - ({})", path, error);
-        }
+        // for specialization in specializations.order {
+        //     let name = specialization.name().to_owned();
+        //     match specialization {
+        //         PathValue::Struct(x) => {
+        //             self.structs.insert(name, x);
+        //         }
+        //         PathValue::OpaqueItem(x) => {
+        //             self.opaque_items.insert(name, x);
+        //         }
+        //         PathValue::Enum(x) => {
+        //             self.enums.insert(name, x);
+        //         }
+        //         PathValue::Typedef(x) => {
+        //             self.typedefs.insert(name, x);
+        //         }
+        //         PathValue::Specialization(..) => {
+        //             unreachable!();
+        //         }
+        //     }
+        // }
+        // for (path, error) in specializations.errors {
+        //     warn!("specializing {} failed - ({})", path, error);
+        // }
 
         // Transfer all typedef annotations to the type they alias
         let mut typedef_annotations = HashMap::new();

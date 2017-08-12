@@ -61,114 +61,6 @@ impl Specialization {
             }
         }
     }
-
-    pub fn add_specializations(&self, library: &Library,
-                               out: &mut SpecializationList,
-                               cycle_check: &mut CycleCheckList)
-    {
-        match self.specialize(library) {
-            Ok(Some(specialization)) => {
-                if !out.items.contains(specialization.name()) {
-                    out.items.insert(specialization.name().to_owned());
-
-                    specialization.add_specializations(library, out, cycle_check);
-
-                    out.order.push(specialization);
-                }
-            }
-            Ok(None) => { }
-            Err(msg) => {
-                out.errors.push((self.name.clone(), msg));
-            }
-        }
-    }
-
-    pub fn specialize(&self, library: &Library) -> Result<Option<PathValue>, String> {
-        match library.resolve_path(&self.aliased) {
-            Some(aliased) => {
-                match aliased {
-                    PathValue::OpaqueItem(ref aliased) => {
-                        if self.generic_values.len() !=
-                           aliased.generic_params.len() {
-                            return Err(format!("incomplete specialization"));
-                        }
-
-                        Ok(Some(PathValue::OpaqueItem(OpaqueItem {
-                            name: self.name.clone(),
-                            generic_params: self.generic_params.clone(),
-                            annotations: self.annotations.clone(),
-                            documentation: self.documentation.clone(),
-                        })))
-                    }
-                    PathValue::Struct(ref aliased) => {
-                        if self.generic_values.len() !=
-                           aliased.generic_params.len() {
-                            return Err(format!("incomplete specialization"));
-                        }
-
-                        let mappings = aliased.generic_params.iter()
-                                                             .zip(self.generic_values.iter())
-                                                             .collect::<Vec<_>>();
-
-                        Ok(Some(PathValue::Struct(Struct {
-                            name: self.name.clone(),
-                            annotations: self.annotations.clone(),
-                            fields: aliased.fields.iter()
-                                                  .map(|x| x.specialize(&mappings))
-                                                  .collect(),
-                            generic_params: self.generic_params.clone(),
-                            documentation: aliased.documentation.clone(),
-                            functions: Vec::new(),
-                            destructor: None,
-                        })))
-                    }
-                    PathValue::Enum(ref aliased) => {
-                        Ok(Some(PathValue::Enum(Enum {
-                            name: self.name.clone(),
-                            repr: aliased.repr.clone(),
-                            annotations: self.annotations.clone(),
-                            values: aliased.values.clone(),
-                            documentation: aliased.documentation.clone(),
-                        })))
-                    }
-                    PathValue::Typedef(ref aliased) => {
-                        Ok(Some(PathValue::Typedef(Typedef {
-                            name: self.name.clone(),
-                            annotations: self.annotations.clone(),
-                            aliased: aliased.aliased.clone(),
-                            documentation: self.documentation.clone(),
-                        })))
-                    }
-                    PathValue::Specialization(ref aliased) => {
-                        if self.generic_values.len() !=
-                           aliased.generic_params.len() {
-                            return Err(format!("incomplete specialization"));
-                        }
-
-                        let mappings = aliased.generic_params.iter()
-                                                             .zip(self.generic_values.iter())
-                                                             .collect::<Vec<_>>();
-
-                        let generic_values = aliased.generic_values.iter()
-                                                                   .map(|x| x.specialize(&mappings))
-                                                                   .collect();
-
-                        Specialization {
-                            name: self.name.clone(),
-                            annotations: self.annotations.clone(),
-                            aliased: aliased.aliased.clone(),
-                            generic_params: self.generic_params.clone(),
-                            generic_values: generic_values,
-                            documentation: self.documentation.clone(),
-                        }.specialize(library)
-                    }
-                }
-            }
-            None => {
-                Err(format!("couldn't find aliased type"))
-            }
-        }
-    }
 }
 
 /// A type alias that is represented as a C typedef
@@ -215,13 +107,6 @@ impl Typedef {
             }
             None => { }
         }
-    }
-
-    pub fn add_specializations(&self, library: &Library,
-                               out: &mut SpecializationList,
-                               cycle_check: &mut CycleCheckList)
-    {
-        self.aliased.add_specializations(library, out, cycle_check);
     }
 
     pub fn mangle_paths(&mut self) {

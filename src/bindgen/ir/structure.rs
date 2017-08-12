@@ -143,15 +143,6 @@ impl Struct {
         ret
     }
 
-    pub fn add_specializations(&self, library: &Library,
-                               out: &mut SpecializationList,
-                               cycle_check: &mut CycleCheckList)
-    {
-        for &StructField{ ref tpe, .. } in &self.fields {
-            tpe.add_specializations(library, out, cycle_check);
-        }
-    }
-
     pub fn rename_fields(&mut self, config: &Config) {
         let rules = [self.annotations.parse_atom::<RenameRule>("rename-all"),
                      config.structure.rename_fields];

@@ -53,16 +53,6 @@ impl Function {
         })
     }
 
-    pub fn add_specializations(&self, library: &Library,
-                               out: &mut SpecializationList,
-                               cycle_check: &mut CycleCheckList)
-    {
-        self.ret.add_specializations(library, out, cycle_check);
-        for &(_, ref ty) in &self.args {
-            ty.add_specializations(library, out, cycle_check);
-        }
-    }
-
     pub fn rename_args(&mut self, config: &Config) {
         let rules = [self.annotations.parse_atom::<RenameRule>("rename-all"),
                      config.function.rename_args];
