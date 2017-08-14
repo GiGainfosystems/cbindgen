@@ -36,7 +36,6 @@ impl OpaqueItem {
             documentation: Documentation::load(doc),
         }
     }
-
 }
 
 impl Source for OpaqueItem {

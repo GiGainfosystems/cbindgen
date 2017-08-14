@@ -50,6 +50,7 @@ pub struct Struct {
     pub documentation: Documentation,
     pub functions: Vec<Function>,
     pub destructor: Option<Function>,
+    pub specialization: Option<Specialization>,
 }
 
 impl Display for Struct {
@@ -76,7 +77,7 @@ impl Struct {
                 for field in fields {
                     if let Some(tpe) = Type::load(&field.ty)? {
                         out.push(StructField{
-                            name: current.to_string(),
+                            name: format!("_{}", current),
                             tpe,
                             doc: Documentation::load(field.get_doc_attr())
                         });
@@ -102,6 +103,7 @@ impl Struct {
             documentation: Documentation::load(doc),
             functions: Vec::new(),
             destructor: None,
+            specialization: None,
         })
     }
 
@@ -118,6 +120,9 @@ impl Struct {
         let mut ret = Vec::new();
         for f in &self.fields {
             ret.extend_from_slice(&f.tpe.get_items(library, DependencyKind::Normal));
+        }
+        if let Some(ref s) = self.specialization {
+            ret.push((Item::Specialization(s.clone()), DependencyKind::Normal));
         }
         if library.config.structure.generate_member_functions {
             for f in &library.functions {
@@ -192,9 +197,7 @@ impl Struct {
     }
 
     pub fn add_member_functions(&mut self, functions: Vec<Function>) {
-        println!("Struct {}", self.name);
         for function in functions {
-            println!("\tFunction {}", function.name);
             if function.annotations.bool("destructor").unwrap_or(false)
                 && self.destructor.is_none() && function.args.len() == 1 &&
                 function.ret == Type::Primitive(PrimitiveType::Void)

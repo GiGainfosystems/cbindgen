@@ -13,7 +13,7 @@ use bindgen::config::Config;
 use bindgen::mangle;
 use std::io::Write;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DependencyKind {
     Ptr,
     Normal,
@@ -35,6 +35,7 @@ pub enum Item {
     Opaque(OpaqueItem),
     Typedef(Typedef),
     Function(Function),
+    Specialization(Specialization),
 }
 
 impl Item {
@@ -45,12 +46,14 @@ impl Item {
             Item::Opaque(ref o) => &o.name,
             Item::Typedef(ref t) => &t.name,
             Item::Function(ref f) => &f.name,
+            Item::Specialization(ref s) => &s.name,
         }
     }
 
     fn get_deps(&self, library: &Library) -> Vec<(Item, DependencyKind)> {
         match *self {
             Item::Enum(_) | Item::Opaque(_) => Vec::new(),
+            Item::Specialization(ref s) => s.get_deps(library),
             Item::Struct(ref s) => s.get_deps(library),
             Item::Typedef(ref t) => t.get_deps(library),
             Item::Function(ref f) => f.get_deps(library),
@@ -59,7 +62,9 @@ impl Item {
 
     fn mangle_paths(&mut self) {
         match *self {
-            Item::Enum(_) | Item::Opaque(_) => {}
+            Item::Enum(_) |
+            Item::Opaque(_) |
+            Item::Specialization(_) => {}
             Item::Struct(ref mut s) => s.mangle_paths(),
             Item::Typedef(ref mut t) => t.mangle_paths(),
             Item::Function(ref mut f) => f.mangle_paths(),
@@ -82,8 +87,6 @@ impl Item {
                                         Type::Ptr(ref t) => {
                                             match **t {
                                                 Type::Path(ref p, ref g) => {
-                                                    let m = mangle::mangle_path(p, g);
-                                                    println!("-> {}", m);
                                                     s.name == mangle::mangle_path(p, g)
                                                 }
                                                 _ => false,
@@ -115,7 +118,32 @@ impl Display for Item {
             Item::Opaque(ref o) => write!(f, "Opaque {}", o.name),
             Item::Typedef(ref t) => write!(f, "Typedef {}", t.name),
             Item::Function(ref c) => write!(f, "Function {}", c.name),
-
+            Item::Specialization(ref s) if !s.generic_values.is_empty() => {
+                write!(f, "Specialization {}<", s.name)?;
+                let mut first = true;
+                for g in &s.generic_values {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}", g.get_root_path())?;
+                }
+                write!(f, ">")
+            }
+            Item::Specialization(ref s) => {
+                write!(f, "Specialization {}<", s.name)?;
+                let mut first = true;
+                for g in &s.generic_params {
+                    if first {
+                        first = false;
+                    } else {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", g)?;
+                }
+                write!(f, ">")
+            }
         }
     }
 }
@@ -131,6 +159,10 @@ impl Hash for Item {
             Item::Opaque(_) => "opaque".hash(state),
             Item::Typedef(_) => "typedef".hash(state),
             Item::Function(_) => "function".hash(state),
+            Item::Specialization(ref s) => {
+                "specialization".hash(state);
+                s.generic_values.len().hash(state);
+            }
         }
     }
 }
@@ -143,6 +175,9 @@ impl PartialEq<Self> for Item {
             (&Item::Opaque(ref o1), &Item::Opaque(ref o2)) => o1.name == o2.name,
             (&Item::Typedef(ref t1), &Item::Typedef(ref t2)) => t1.name == t2.name,
             (&Item::Function(ref f1), &Item::Function(ref f2)) => f1.name == f2.name,
+            (&Item::Specialization(ref s1), &Item::Specialization(ref s2)) => {
+                s1.name == s2.name && s1.generic_values.len() == s2.generic_values.len()
+            }
             _ => false,
         }
     }
@@ -158,6 +193,7 @@ impl Source for Item {
             Item::Opaque(ref o) => o.write(config, out),
             Item::Typedef(ref t) => t.write(config, out),
             Item::Function(ref f) => f.write(config, out),
+            Item::Specialization(ref s) => s.write(config, out),
         }
     }
 }
@@ -187,17 +223,18 @@ impl DependencyList {
             self.lookup.insert(item.clone(), idx);
             let deps = item.get_deps(library);
             for &(ref d, _) in &deps {
-                match *d {
-                    Item::Struct(ref s) => {
-                        assert!(s.generic_params.is_empty());
-                    }
-                    _ => {}
-                }
                 self.add_dep(d.clone(), library);
             }
             for (d, k) in deps {
                 if let Some(to_id) = self.lookup.get(&d) {
-                    self.graph.add_edge(idx, *to_id, k);
+                    match d {
+                        Item::Specialization(ref s) if !s.generic_values.is_empty() => {
+                            self.graph.add_edge(*to_id, idx, k);
+                        }
+                        _ => {
+                            self.graph.add_edge(idx, *to_id, k);
+                        }
+                    }
                 } else {
                     println!("Did not found {:?}", d);
                     panic!();
@@ -219,11 +256,26 @@ impl DependencyList {
             let node = self.graph.node_weight(id).expect("Got id from graph above");
             match *node {
                 Item::Struct(ref s) => {
+                    // It is possible to have multiple edges with different
+                    // dependencies between nodes, so we need to group the edges by
+                    // theire source
+                    let mut edges = HashMap::new();
+                    for e in self.graph.edges_directed(id, Direction::Incoming) {
+                        edges.entry(e.source()).or_insert_with(Vec::new).push(e);
+                    }
+                    // We would only remove edges with a ptr dependency between nodes
+                    // by injecting a opaque wrapper
+                    let edges = edges
+                        .values()
+                        .filter(|edges| edges.iter().all(|e| e.weight() == &DependencyKind::Ptr))
+                        .flat_map(|edges| edges.iter().map(|e| e.id()))
+                        .collect::<Vec<_>>();
+                    // If there is node ptr dependency we are done here
+                    if edges.is_empty() {
+                        return;
+                    }
                     ret.push(Item::Opaque(s.as_opaque()));
-                    self.graph
-                        .edges_directed(id, Direction::Incoming)
-                        .map(|e| e.id())
-                        .collect::<Vec<_>>()
+                    edges
                 }
                 _ => return,
             }
@@ -242,6 +294,10 @@ impl DependencyList {
                 .externals(Direction::Outgoing)
                 .collect::<Vec<_>>();
             if externals.is_empty() {
+                if cycle_counter >= self.graph.node_count() {
+                    self.print();
+                    panic!("Could not remove cycle")
+                }
                 // there is a cyclic graph left, so we add a struct as opaque
                 // item and remove some edge from the dependceny graph
                 let id = self.graph
