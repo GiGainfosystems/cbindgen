@@ -161,7 +161,7 @@ impl Hash for Item {
             Item::Function(_) => "function".hash(state),
             Item::Specialization(ref s) => {
                 "specialization".hash(state);
-                s.generic_values.len().hash(state);
+                s.generic_values.hash(state);
             }
         }
     }
@@ -176,7 +176,7 @@ impl PartialEq<Self> for Item {
             (&Item::Typedef(ref t1), &Item::Typedef(ref t2)) => t1.name == t2.name,
             (&Item::Function(ref f1), &Item::Function(ref f2)) => f1.name == f2.name,
             (&Item::Specialization(ref s1), &Item::Specialization(ref s2)) => {
-                s1.name == s2.name && s1.generic_values.len() == s2.generic_values.len()
+                s1.name == s2.name && s1.generic_values == s2.generic_values
             }
             _ => false,
         }
