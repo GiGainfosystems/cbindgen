@@ -229,13 +229,13 @@ impl Struct {
 
                 out.write(&format!("~{}()", self.name));
                 out.open_brace();
-                let option_1 = out.measure(|out| format_function_call_1(destructor, out));
+                let option_1 = out.measure(|out| format_function_call_1(destructor, config, out));
 
                 if (config.function.args == Layout::Auto && option_1 <= config.line_length) ||
                     config.function.args == Layout::Horizontal {
-                        format_function_call_1(destructor, out);
+                        format_function_call_1(destructor, config, out);
                     } else {
-                        format_function_call_2(destructor, out);
+                        format_function_call_2(destructor, config, out);
                     }
 
                 out.close_brace(false);
@@ -254,13 +254,13 @@ impl Struct {
             out.new_line();
             f.write_formated(config, out, FunctionWriteMode::MemberFunction);
             out.open_brace();
-            let option_1 = out.measure(|out| format_function_call_1(f, out));
+            let option_1 = out.measure(|out| format_function_call_1(f, config, out));
 
             if (config.function.args == Layout::Auto && option_1 <= config.line_length) ||
                 config.function.args == Layout::Horizontal {
-                    format_function_call_1(f, out);
+                    format_function_call_1(f, config, out);
                 } else {
-                    format_function_call_2(f, out);
+                    format_function_call_2(f, config, out);
                 }
 
             out.close_brace(false);
@@ -352,11 +352,33 @@ impl Source for Struct {
     }
 }
 
-fn format_function_call_1<W: Write>(f: &Function, out: &mut SourceWriter<W>) {
+fn get_namespace(config: &Config) -> String {
+    let mut namespace = String::new();
+    if let Some(ref n) = config.namespace {
+        namespace += n;
+    }
+    if let Some(ref namespaces) = config.namespaces {
+        let mut has_namespace = namespace.is_empty();
+        for n in namespaces {
+            if has_namespace {
+                namespace += "::";
+            } else {
+                has_namespace = true;
+            }
+            namespace += n;
+        }
+    }
+
+    namespace += "::";
+    namespace
+}
+
+fn format_function_call_1<W: Write>(f: &Function, config: &Config, out: &mut SourceWriter<W>) {
+    let namespace = get_namespace(config);
     if f.ret == Type::Primitive(PrimitiveType::Void) {
-        out.write("::");
+        out.write(&namespace);
     } else {
-        out.write("return ::");
+        out.write(&format!("return {}", namespace));
     }
     out.write(&f.name);
     out.write("(this");
@@ -367,11 +389,12 @@ fn format_function_call_1<W: Write>(f: &Function, out: &mut SourceWriter<W>) {
     out.write(");");
 }
 
-fn format_function_call_2<W: Write>(f: &Function, out: &mut SourceWriter<W>) {
+fn format_function_call_2<W: Write>(f: &Function, config: &Config, out: &mut SourceWriter<W>) {
+    let namespace = get_namespace(config);
     if f.ret == Type::Primitive(PrimitiveType::Void) {
-        out.write("::");
+        out.write(&namespace);
     } else {
-        out.write("return ::");
+        out.write(&format!("return {}", namespace));
     }
     out.write(&f.name);
     out.write("(");
