@@ -1,13 +1,13 @@
-
 #[repr(C)]
-pub struct A {
-    b: *const B,
+pub struct Foo {
+    a: i32,
+    b: *const Bar,
 }
 
 #[repr(C)]
-pub struct B {
-    a: *const A,
+pub struct Bar {
+    a: *mut Foo,
 }
 
 #[no_mangle]
-pub extern "C" fn foo(a: A) {}
+pub extern "C" fn foo(f: Foo) {}
