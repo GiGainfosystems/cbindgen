@@ -344,35 +344,92 @@ impl Type {
             }
             Type::Path(ref path, ref generic_values) => {
                 if let Some(value) = library.resolve_path(path) {
-                    let item = match value {
-                        PathValue::Enum(e) => Item::Enum(e),
-                        PathValue::Struct(s) => {
-                            if s.generic_params.is_empty() {
-                                Item::Struct(s)
-                            } else {
-                                let mappings = s.generic_params.iter()
-                                    .zip(generic_values.iter())
-                                    .collect::<Vec<_>>();
+                     match value {
+                         Item::Struct(s) => {
+                             if s.generic_params.is_empty() {
+                                 vec![(Item::Struct(s), kind)]
+                             } else {
+                                 let mut ret = Vec::new();
+                                 let mappings = s.generic_params.iter()
+                                     .zip(generic_values.iter())
+                                     .collect::<Vec<_>>();
 
-                                let monomorph = super::Struct {
-                                    name: mangle::mangle_path(&s.name, generic_values),
-                                    fields: s.fields.iter()
-                                        .map(|x| x.specialize(&mappings), )
-                                        .collect(),
-                                    generic_params: vec![],
-                                    functions: vec![],
-                                    destructor: None,
-                                    ..s.clone()
-                                };
-                                Item::Struct(monomorph)
-                            }
-                        }
-                        PathValue::Typedef(t) => Item::Typedef(t),
-                        PathValue::OpaqueItem(o) => Item::Opaque(o),
-                    };
-                    vec![(item, kind)]
+                                 let specialized = super::Specialization {
+                                     name: s.name.clone(),
+                                     annotations: s.annotations.clone(),
+                                     generic_params: s.generic_params.clone(),
+                                     documentation: s.documentation.clone(),
+                                     generic_values: generic_values.iter()
+                                         .cloned()
+                                         .map(|mut g| {
+                                             g.mangle_paths();
+                                             g
+                                         })
+                                         .collect(),
+                                 };
+
+                                 let monomorph = super::Struct {
+                                     name: mangle::mangle_path(&s.name, generic_values),
+                                     fields: s.fields.iter()
+                                         .map(|x| x.specialize(&mappings), )
+                                         .collect(),
+                                     generic_params: vec![],
+                                     functions: vec![],
+                                     destructor: None,
+                                     specialization: Some(specialized),
+                                     ..s
+                                 };
+                                 ret.push((Item::Struct(monomorph), kind));
+
+                                 ret
+                             }
+                         }
+                         Item::Typedef(t) => {
+                             if t.generic_params.is_empty() {
+                                 vec![(Item::Typedef(t), kind)]
+                             } else {
+                                 let mappings = t.generic_params.iter()
+                                     .zip(generic_values.iter())
+                                     .collect::<Vec<_>>();
+                                 let specialized = super::Specialization {
+                                     name: t.name.clone(),
+                                     annotations: t.annotations.clone(),
+                                     generic_params: t.generic_params.clone(),
+                                     documentation: t.documentation.clone(),
+                                     generic_values: generic_values.iter()
+                                         .cloned()
+                                         .map(|mut g| {
+                                             g.mangle_paths();
+                                             g
+                                         })
+                                         .collect(),
+                                 };
+                                 let monomorph = super::Typedef {
+                                     name: mangle::mangle_path(&t.name, generic_values),
+                                     generic_params: vec![],
+                                     aliased: t.aliased.specialize(&mappings),
+                                     specialization: Some(specialized),
+                                     ..t
+                                 };
+                                 vec![(Item::Typedef(monomorph), kind)]
+                             }
+                         }
+                         Item::Opaque(o) => {
+                             if o.generic_params.is_empty() {
+                                 vec![(Item::Opaque(o), kind)]
+                             } else {
+                                 let monomorph = super::OpaqueItem {
+                                     name: mangle::mangle_path(&o.name, generic_values),
+                                     generic_params: vec![],
+                                     ..o
+                                 };
+                                 vec![(Item::Opaque(monomorph), kind)]
+                             }
+                         }
+                         i => vec![(i, kind)],
+                    }
                 } else {
-                    panic!()
+                    Vec::new()
                 }
             }
         }

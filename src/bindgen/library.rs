@@ -25,15 +25,6 @@ pub use bindgen::dependency_graph::DependencyList;
 /// A path ref is used to reference a path value
 pub type PathRef = String;
 
-/// A path value is any type of rust item besides a function
-#[derive(Debug, Clone)]
-pub enum PathValue {
-    Enum(Enum),
-    Struct(Struct),
-    OpaqueItem(OpaqueItem),
-    Typedef(Typedef),
-}
-
 /// A library contains all of the information needed to generate bindings for a rust library.
 #[derive(Debug, Clone)]
 pub struct Library {
@@ -44,7 +35,6 @@ pub struct Library {
     structs: BTreeMap<String, Struct>,
     opaque_items: BTreeMap<String, OpaqueItem>,
     typedefs: BTreeMap<String, Typedef>,
-    specializations: BTreeMap<String, Specialization>,
     pub(crate) functions: Vec<Function>,
 }
 
@@ -58,7 +48,6 @@ impl Library {
             structs: BTreeMap::new(),
             opaque_items: BTreeMap::new(),
             typedefs: BTreeMap::new(),
-            specializations: BTreeMap::new(),
             functions: Vec::new(),
         }
     }
@@ -362,100 +351,47 @@ impl Library {
         };
 
 
-        let fail1 = if generics.lifetimes.is_empty() &&
-                       generics.ty_params.is_empty()
+        let fail =  match Typedef::load(alias_name.clone(),
+                                         annotations.clone(),
+                                         generics,
+                                         ty,
+                                         item.get_doc_attr())
         {
-            match Typedef::load(alias_name.clone(),
-                                annotations.clone(),
-                                ty,
-                                item.get_doc_attr())
-            {
-                Ok(typedef) => {
-                    info!("take {}::{}", crate_name, &item.ident);
-                    self.typedefs.insert(alias_name, typedef);
-                    return;
-                }
-                Err(msg) => msg,
-            }
-        } else {
-            format!("cannot have generics in typedef")
-        };
-
-        let fail2 = match Specialization::load(alias_name.clone(),
-                                               annotations.clone(),
-                                               generics,
-                                               ty,
-                                               item.get_doc_attr()) {
-            Ok(spec) => {
+            Ok(typedef) => {
                 info!("take {}::{}", crate_name, &item.ident);
-                self.specializations.insert(alias_name, spec);
+                self.typedefs.insert(alias_name, typedef);
                 return;
             }
-            Err(msg) => msg,
+            Err(msg) => {
+                msg
+            },
         };
 
-        info!("skip {}::{} - ({} and {})",
+        info!("skip {}::{} - ({})",
               crate_name,
               &item.ident,
-              fail1,
-              fail2);
+              fail);
     }
 
-    pub fn resolve_path(&self, p: &PathRef) -> Option<PathValue> {
+    pub fn resolve_path(&self, p: &PathRef) -> Option<Item> {
         if let Some(x) = self.enums.get(p) {
-            return Some(PathValue::Enum(x.clone()));
+            return Some(Item::Enum(x.clone()));
         }
         if let Some(x) = self.structs.get(p) {
-            return Some(PathValue::Struct(x.clone()));
+            return Some(Item::Struct(x.clone()));
         }
         if let Some(x) = self.opaque_items.get(p) {
-            return Some(PathValue::OpaqueItem(x.clone()));
+            return Some(Item::Opaque(x.clone()));
         }
         if let Some(x) = self.typedefs.get(p) {
-            return Some(PathValue::Typedef(x.clone()));
+            return Some(Item::Typedef(x.clone()));
         }
-
         None
     }
 
     /// Build a bindings file from this rust library.
     pub fn generate(mut self) -> Result<GeneratedBindings, String> {
         let mut result = GeneratedBindings::blank(&self.config);
-
-        // Specialize types into new types and remove all the specializations
-        // that are left behind
-        // let mut specializations = SpecializationList::new();
-        // let mut cycle_check_list = CycleCheckList::new();
-        // for function in &self.functions {
-        //     function.add_specializations(&self,
-        //                                  &mut specializations,
-        //                                  &mut cycle_check_list);
-        // }
-        // self.specializations.clear();
-
-        // for specialization in specializations.order {
-        //     let name = specialization.name().to_owned();
-        //     match specialization {
-        //         PathValue::Struct(x) => {
-        //             self.structs.insert(name, x);
-        //         }
-        //         PathValue::OpaqueItem(x) => {
-        //             self.opaque_items.insert(name, x);
-        //         }
-        //         PathValue::Enum(x) => {
-        //             self.enums.insert(name, x);
-        //         }
-        //         PathValue::Typedef(x) => {
-        //             self.typedefs.insert(name, x);
-        //         }
-        //         PathValue::Specialization(..) => {
-        //             unreachable!();
-        //         }
-        //     }
-        // }
-        // for (path, error) in specializations.errors {
-        //     warn!("specializing {} failed - ({})", path, error);
-        // }
 
         // Transfer all typedef annotations to the type they alias
         let mut typedef_annotations = HashMap::new();
@@ -500,21 +436,13 @@ impl Library {
                 x.annotations = annotations;
                 continue;
             }
-            if let Some(x) = self.specializations.get_mut(&alias_path) {
-                if !x.annotations.is_empty() {
-                    warn!("can't transfer annotations from typedef to alias ({}) that already has annotations.",
-                          alias_path);
-                    continue;
-                }
-                x.annotations = annotations;
-                continue;
-            }
         }
 
+        let deps = DependencyList::new(&self.functions, &self);
 
         // Gather only the items that we need for this
         // `extern "c"` interface
-        result.items = DependencyList::new(&self.functions, &self).calculate_order();
+        result.items = deps.calculate_order();
         Ok(result)
     }
 }
@@ -524,20 +452,13 @@ impl Library {
 pub struct GeneratedBindings {
     config: Config,
     items: Vec<Item>,
-    // monomorphs: Monomorphs,
-    // items: Vec<PathValue>,
-    // functions: Vec<Function>,
-    // member_function_structs: Vec<Struct>,
 }
 
 impl GeneratedBindings {
     fn blank(config: &Config) -> GeneratedBindings {
         GeneratedBindings {
             config: config.clone(),
-            // monomorphs: Monomorphs::new(),
             items: Vec::new(),
-            // functions: Vec::new(),
-            // member_function_structs: Vec::new(),
         }
     }
 
@@ -591,8 +512,6 @@ impl GeneratedBindings {
 
         if self.config.language == Language::Cxx {
             out.new_line_if_not_start();
-            out.write("extern \"C\" {");
-            out.new_line();
 
             let mut wrote_namespace: bool = false;
             if let Some(ref namespace) = self.config.namespace {
@@ -650,108 +569,7 @@ impl GeneratedBindings {
             if wrote_namespace {
                 out.new_line();
             }
-
-            out.new_line_if_not_start();
-            out.write("} // extern \"C\"");
-            out.new_line();
         }
-
-        // if self.config.structure.generic_template_specialization &&
-        //     self.config.language == Language::Cxx &&
-        //     !self.monomorphs.is_empty()
-        // {
-        //     let mut wrote_namespace: bool = false;
-        //     if let Some(ref namespace) = self.config.namespace {
-        //         wrote_namespace = true;
-
-        //         out.new_line();
-        //         out.write("namespace ");
-        //         out.write(namespace);
-        //         out.write(" {");
-        //     }
-        //     if let Some(ref namespaces) = self.config.namespaces {
-        //         wrote_namespace = true;
-        //         for namespace in namespaces {
-        //             out.new_line();
-        //             out.write("namespace ");
-        //             out.write(namespace);
-        //             out.write(" {");
-        //         }
-        //     }
-        //     if wrote_namespace {
-        //         out.new_line();
-        //     }
-        //     let mut specialization = Vec::new();
-        //     for (path, monomorph_sets) in &self.monomorphs {
-        //         if monomorph_sets.len() == 0 {
-        //             continue;
-        //         }
-
-        //         // TODO
-        //         let is_opaque = monomorph_sets.iter().next().unwrap().1.is_opaque();
-        //         let generics_count = monomorph_sets.iter().next().unwrap().0.len();
-        //         let generics_names = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
-        //                               "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
-
-        //         if is_opaque || generics_count > 26 {
-        //             continue;
-        //         }
-
-        //         out.new_line_if_not_start();
-        //         out.write("template<");
-        //         for i in 0..generics_count {
-        //             if i != 0 {
-        //                 out.write(", ")
-        //             }
-        //             out.write("typename ");
-        //             out.write(generics_names[i]);
-        //         }
-        //         out.write(">");
-        //         out.new_line();
-        //         out.write(&format!("struct {}", path));
-        //         out.open_brace();
-        //         out.close_brace(true);
-        //         out.new_line();
-        //         // Collect all specializations and print them after theall generic versions are generated
-        //         // This is needed because the specilizations could have dependencies to each other
-        //         specialization.push((path, monomorph_sets));
-        //     }
-
-        //     for (path, monomorph_sets) in specialization {
-        //         for (generic_values, monomorph) in monomorph_sets {
-        //             out.new_line();
-        //             out.write("template<>");
-        //             out.new_line();
-        //             out.write(&format!("struct {}<", path));
-        //             out.write_horizontal_source_list(generic_values, ListType::Join(", "));
-        //             out.write(&format!("> : public {}", monomorph.name()));
-        //             out.open_brace();
-        //             out.close_brace(true);
-        //             out.new_line();
-        //         }
-        //     }
-
-        //     let mut wrote_namespace: bool = false;
-        //     if let Some(ref namespaces) = self.config.namespaces {
-        //         wrote_namespace = true;
-
-        //         for namespace in namespaces.iter().rev() {
-        //             out.new_line_if_not_start();
-        //             out.write("} // namespace ");
-        //             out.write(namespace);
-        //         }
-        //     }
-        //     if let Some(ref namespace) = self.config.namespace {
-        //         wrote_namespace = true;
-
-        //         out.new_line_if_not_start();
-        //         out.write("} // namespace ");
-        //         out.write(namespace);
-        //     }
-        //     if wrote_namespace {
-        //         out.new_line();
-        //     }
-        // }
 
         if self.config.language == Language::Cxx {
             out.new_line_if_not_start();

@@ -14,6 +14,7 @@ use bindgen::library::*;
 use bindgen::utilities::*;
 use bindgen::writer::*;
 use bindgen::dependency_graph::{Item, DependencyKind};
+use bindgen::mangle;
 
 /// A type alias that generates a copy of its aliasee with a new name. If the type
 /// alias has generic values, it monomorphosizes its aliasee. This is useful for
@@ -22,43 +23,78 @@ use bindgen::dependency_graph::{Item, DependencyKind};
 pub struct Specialization {
     pub name: String,
     pub annotations: AnnotationSet,
-    pub aliased: PathRef,
     pub generic_params: Vec<String>,
     pub generic_values: Vec<Type>,
     pub documentation: Documentation,
 }
 
 impl Specialization {
-    pub fn load(name: String,
-                annotations: AnnotationSet,
-                generics: &syn::Generics,
-                ty: &syn::Ty,
-                doc: String) -> Result<Specialization, String>
-    {
-        match ty {
-            &syn::Ty::Path(ref _q, ref p) => {
-                let generic_params = generics.ty_params.iter()
-                                                       .map(|x| x.ident.to_string())
-                                                       .collect::<Vec<_>>();
-
-                let (path, generic_values) = p.convert_to_generic_single_segment()?;
-
-                if PrimitiveType::maybe(&path).is_some() {
-                    return Err(format!("can't specialize a primitive"));
+    pub fn get_deps(&self, library: &Library) -> Vec<(Item, DependencyKind)> {
+        if self.generic_values.is_empty() {
+            return Vec::new();
+        }
+        if let Some(v) = library.resolve_path(&self.name) {
+            let mut ret = self.generic_values.iter()
+                .flat_map(|g| g.get_items(library, DependencyKind::Normal))
+                .collect::<Vec<_>>();
+            match v {
+                Item::Struct(mut s) => {
+                    s.name = mangle::mangle_path(&s.name, &self.generic_values);
+                    ret.push((Item::Specialization(Specialization {
+                        generic_values: Vec::new(),
+                        ..self.clone()
+                    }), DependencyKind::Normal));
+                    ret
                 }
+                Item::Typedef(mut t) => {
+                    t.name = mangle::mangle_path(&t.name, &self.generic_values);
+                    ret.push((Item::Specialization(Specialization {
+                        generic_values: Vec::new(),
+                        ..self.clone()
+                    }), DependencyKind::Normal));
+                    ret
+                }
+                e =>{ println!("{:?}", e); unimplemented!()}
+            }
+        } else {
+            Vec::new()
+        }
+    }
+}
 
-                Ok(Specialization {
-                    name: name,
-                    annotations: annotations,
-                    aliased: path,
-                    generic_params: generic_params,
-                    generic_values: generic_values,
-                    documentation: Documentation::load(doc),
-                })
+impl Source for Specialization {
+    fn write<F: Write>(&self, config: &Config, out: &mut SourceWriter<F>) {
+        self.documentation.write(config, out);
+        if self.generic_values.is_empty() {
+            out.write("template<");
+            let mut first = true;
+            for t in &self.generic_params {
+                if first {
+                    first = false;
+                } else {
+                    out.write(", ");
+                }
+                out.write(&format!("typename {}", t));
             }
-            _ => {
-                Err(format!("not a path"))
+            out.write(">");
+            out.new_line();
+            out.write(&format!("struct {};", self.name));
+        } else {
+            out.write("template<>");
+            out.new_line();
+            out.write(&format!("struct {}<", self.name));
+            let mut first = true;
+            for t in &self.generic_values {
+                if first {
+                    first = false;
+                } else {
+                    out.write(", ");
+                }
+                t.write(config, out);
             }
+            out.write(&format!("> : public {}", &mangle::mangle_path(&self.name, &self.generic_values)));
+            out.open_brace();
+            out.close_brace(true);
         }
     }
 }
@@ -68,22 +104,57 @@ impl Specialization {
 pub struct Typedef {
     pub name: String,
     pub annotations: AnnotationSet,
+    pub generic_params: Vec<String>,
+    pub generic_values: Vec<Type>,
     pub aliased: Type,
     pub documentation: Documentation,
+    pub specialization: Option<Specialization>,
 }
 
 impl Typedef {
     pub fn load(name: String,
                 annotations: AnnotationSet,
+                generics: &syn::Generics,
                 ty: &syn::Ty,
-                doc: String) -> Result<Typedef, String> {
+                doc: String)
+                -> Result<Typedef, String> {
         if let Some(x) = Type::load(ty)? {
-            Ok(Typedef {
-                name: name,
-                annotations: annotations,
-                aliased: x,
-                documentation: Documentation::load(doc),
-            })
+            match ty {
+                &syn::Ty::Path(_, ref p) => {
+                   let generic_params = generics
+                        .ty_params
+                        .iter()
+                        .map(|x| x.ident.to_string())
+                        .collect::<Vec<_>>();
+
+                    let (_, generic_values) = p.convert_to_generic_single_segment()?;
+                    Ok(Typedef {
+                        name: name,
+                        annotations: annotations,
+                        aliased: x,
+                        generic_params,
+                        generic_values,
+                        documentation: Documentation::load(doc),
+                        specialization: None,
+                    })
+                }
+                _ if generics.ty_params.is_empty() &&
+                    generics.lifetimes.is_empty() => {
+                    Ok(Typedef {
+                        name: name,
+                        annotations: annotations,
+                        aliased: x,
+                        generic_params: Vec::new(),
+                        generic_values: Vec::new(),
+                        documentation: Documentation::load(doc),
+                        specialization: None,
+                    })
+                }
+                i => {
+                    println!("{:?}", i);
+                    unimplemented!()
+                }
+            }
         } else {
             Err(format!("cannot have a typedef of a zero sized type"))
         }
@@ -98,14 +169,15 @@ impl Typedef {
             Some(alias_path) => {
                 if out.contains_key(&alias_path) {
                     warn!("multiple typedef's with annotations for {}. ignoring annotations from {}.",
-                          alias_path, self.name);
+                          alias_path,
+                          self.name);
                     return;
                 }
 
                 out.insert(alias_path, self.annotations.clone());
                 self.annotations = AnnotationSet::new();
             }
-            None => { }
+            None => {}
         }
     }
 
@@ -114,7 +186,12 @@ impl Typedef {
     }
 
     pub fn get_deps(&self, library: &Library) -> Vec<(Item, DependencyKind)> {
-        self.aliased.get_items(library, DependencyKind::Normal)
+        assert!(self.generic_params.is_empty());
+        let mut ret = self.aliased.get_items(library, DependencyKind::Normal);
+        if let Some(ref s) = self.specialization {
+            ret.push((Item::Specialization(s.clone()), DependencyKind::Normal));
+        }
+        ret
     }
 }
 
