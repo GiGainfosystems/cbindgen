@@ -54,14 +54,17 @@ impl Library {
 
     fn add_std_types(&mut self) {
         let mut add_opaque = |name: &str, generic_params: Vec<&str>| {
-            self.opaque_items.insert(name.to_owned(), OpaqueItem {
-                name: name.to_owned(),
-                generic_params: generic_params.iter()
-                                              .map(|x| (*x).to_owned())
-                                              .collect(),
-                annotations: AnnotationSet::new(),
-                documentation: Documentation::none(),
-            })
+            self.opaque_items
+                .insert(name.to_owned(),
+                        OpaqueItem {
+                            name: name.to_owned(),
+                            generic_params: generic_params
+                                .iter()
+                                .map(|x| (*x).to_owned())
+                                .collect(),
+                            annotations: AnnotationSet::new(),
+                            documentation: Documentation::none(),
+                        })
         };
 
         add_opaque("String", vec![]);
@@ -80,25 +83,21 @@ impl Library {
     }
 
     /// Parse the specified crate or source file and load #[repr(C)] types for binding generation.
-    pub fn load_src(src: &path::Path,
-                    config: &Config) -> Result<Library, String>
-    {
+    pub fn load_src(src: &path::Path, config: &Config) -> Result<Library, String> {
         let mut library = Library::blank("", config);
         library.add_std_types();
 
-        rust_lib::parse_src(src, &mut |crate_name, items| {
-            library.load_syn_crate_mod(&crate_name, items);
-        })?;
+        rust_lib::parse_src(src,
+                            &mut |crate_name, items| {
+                                     library.load_syn_crate_mod(&crate_name, items);
+                                 })?;
 
         Ok(library)
     }
 
     /// Parse the specified crate or source file and load #[repr(C)] types for binding generation.
-    pub fn load_crate(lib: Cargo,
-                      config: &Config) -> Result<Library, String>
-    {
-        let mut library = Library::blank(lib.binding_crate_name(),
-                                         config);
+    pub fn load_crate(lib: Cargo, config: &Config) -> Result<Library, String> {
+        let mut library = Library::blank(lib.binding_crate_name(), config);
         library.add_std_types();
 
         rust_lib::parse_lib(lib,
@@ -107,8 +106,8 @@ impl Library {
                             &config.parse.exclude,
                             &config.parse.expand,
                             &mut |crate_name, items| {
-            library.load_syn_crate_mod(&crate_name, items);
-        })?;
+                                     library.load_syn_crate_mod(&crate_name, items);
+                                 })?;
 
         Ok(library)
     }
@@ -136,7 +135,7 @@ impl Library {
                 syn::ItemKind::Ty(ref ty, ref generics) => {
                     self.load_syn_ty(crate_name, item, ty, generics);
                 }
-                _ => { }
+                _ => {}
             }
         }
     }
@@ -147,14 +146,15 @@ impl Library {
                             item: &syn::Item,
                             block: &syn::ForeignMod) {
         if !block.abi.is_c() {
-            info!("skip {}::{} - (extern block must be extern C)", crate_name, &item.ident);
+            info!("skip {}::{} - (extern block must be extern C)",
+                  crate_name,
+                  &item.ident);
             return;
         }
 
         for foreign_item in &block.items {
             match foreign_item.node {
-                syn::ForeignItemKind::Fn(ref decl,
-                                         ref _generic) => {
+                syn::ForeignItemKind::Fn(ref decl, ref _generic) => {
                     if crate_name != self.bindings_crate_name {
                         info!("skip {}::{} - (fn's outside of the binding crate are not used)",
                               crate_name,
@@ -185,7 +185,7 @@ impl Library {
                                    crate_name,
                                    &foreign_item.ident,
                                    msg);
-                        },
+                        }
                     }
                 }
                 _ => {}
@@ -226,11 +226,8 @@ impl Library {
                     self.functions.push(func);
                 }
                 Err(msg) => {
-                    error!("cannot use fn {}::{} ({})",
-                           crate_name,
-                           &item.ident,
-                           msg);
-                },
+                    error!("cannot use fn {}::{} ({})", crate_name, &item.ident, msg);
+                }
             }
         } else {
             if item.is_no_mangle() != abi.is_c() {
@@ -264,30 +261,25 @@ impl Library {
                                item.get_doc_attr()) {
                 Ok(st) => {
                     info!("take {}::{}", crate_name, &item.ident);
-                    self.structs.insert(struct_name,
-                                        st);
+                    self.structs.insert(struct_name, st);
                 }
                 Err(msg) => {
-                    info!("take {}::{} - opaque ({})",
-                          crate_name,
-                          &item.ident,
-                          msg);
-                    self.opaque_items.insert(struct_name.clone(),
-                                             OpaqueItem::new(struct_name,
-                                                             generics,
-                                                             annotations,
-                                                             item.get_doc_attr()));
+                    info!("take {}::{} - opaque ({})", crate_name, &item.ident, msg);
+                    self.opaque_items
+                        .insert(struct_name.clone(),
+                                OpaqueItem::new(struct_name,
+                                                generics,
+                                                annotations,
+                                                item.get_doc_attr()));
                 }
             }
         } else {
             info!("take {}::{} - opaque (not marked as repr(C))",
                   crate_name,
                   &item.ident);
-            self.opaque_items.insert(struct_name.clone(),
-                                     OpaqueItem::new(struct_name,
-                                                     generics,
-                                                     annotations,
-                                                     item.get_doc_attr()));
+            self.opaque_items
+                .insert(struct_name.clone(),
+                        OpaqueItem::new(struct_name, generics, annotations, item.get_doc_attr()));
         }
     }
 
@@ -297,8 +289,7 @@ impl Library {
                      item: &syn::Item,
                      variants: &Vec<syn::Variant>,
                      generics: &syn::Generics) {
-        if !generics.lifetimes.is_empty() ||
-           !generics.ty_params.is_empty() ||
+        if !generics.lifetimes.is_empty() || !generics.ty_params.is_empty() ||
            !generics.where_clause.predicates.is_empty() {
             info!("skip {}::{} - (has generics or lifetimes or where bounds)",
                   crate_name,
@@ -326,11 +317,9 @@ impl Library {
             }
             Err(msg) => {
                 info!("take {}::{} - opaque ({})", crate_name, &item.ident, msg);
-                self.opaque_items.insert(enum_name.clone(),
-                                         OpaqueItem::new(enum_name,
-                                                         generics,
-                                                         annotations,
-                                                         item.get_doc_attr()));
+                self.opaque_items
+                    .insert(enum_name.clone(),
+                            OpaqueItem::new(enum_name, generics, annotations, item.get_doc_attr()));
             }
         }
     }
@@ -351,26 +340,20 @@ impl Library {
         };
 
 
-        let fail =  match Typedef::load(alias_name.clone(),
-                                         annotations.clone(),
-                                         generics,
-                                         ty,
-                                         item.get_doc_attr())
-        {
+        let fail = match Typedef::load(alias_name.clone(),
+                                       annotations.clone(),
+                                       generics,
+                                       ty,
+                                       item.get_doc_attr()) {
             Ok(typedef) => {
                 info!("take {}::{}", crate_name, &item.ident);
                 self.typedefs.insert(alias_name, typedef);
                 return;
             }
-            Err(msg) => {
-                msg
-            },
+            Err(msg) => msg,
         };
 
-        info!("skip {}::{} - ({})",
-              crate_name,
-              &item.ident,
-              fail);
+        info!("skip {}::{} - ({})", crate_name, &item.ident, fail);
     }
 
     pub fn resolve_path(&self, p: &PathRef) -> Option<Item> {
@@ -438,8 +421,11 @@ impl Library {
             }
         }
 
-        let deps = DependencyList::new(&self.functions, &self);
-
+        let mut deps = DependencyList::new(&self.functions, &self);
+        if self.config.structure.generate_member_functions &&
+           self.config.language == Language::Cxx {
+            deps.fix_abi();
+        }
         // Gather only the items that we need for this
         // `extern "c"` interface
         result.items = deps.calculate_order();
@@ -573,9 +559,9 @@ impl GeneratedBindings {
 
         if self.config.language == Language::Cxx {
             out.new_line_if_not_start();
-            out.write("static_assert(sizeof(float) == 4);");
+            out.write("static_assert(sizeof(float) == 4, \"Float size does not match\");");
             out.new_line();
-            out.write("static_assert(sizeof(double) == 8);");
+            out.write("static_assert(sizeof(double) == 8, \"Double size does not match\");");
             out.new_line();
         }
 

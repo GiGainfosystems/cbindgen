@@ -224,19 +224,18 @@ impl Type {
                 };
 
                 Type::Array(Box::new(converted), size)
-            },
+            }
             &syn::Ty::BareFn(ref function) => {
-                let args = function.inputs.iter()
-                                          .try_skip_map(|x| Type::load(&x.ty))?;
+                let args = function.inputs.iter().try_skip_map(|x| Type::load(&x.ty))?;
                 let ret = function.output.as_type()?;
 
                 Type::FuncPtr(Box::new(ret), args)
-            },
+            }
             &syn::Ty::Tup(ref fields) => {
                 if fields.len() == 0 {
                     return Ok(None);
                 }
-                return Err(format!("tuples are not supported as types"))
+                return Err(format!("tuples are not supported as types"));
             }
             _ => return Err(format!("unexpected type")),
         };
@@ -249,32 +248,28 @@ impl Type {
 
         loop {
             match current {
-                &Type::ConstPtr(ref ty) => { current = ty },
-                &Type::Ptr(ref ty) => { current = ty },
+                &Type::ConstPtr(ref ty) => current = ty,
+                &Type::Ptr(ref ty) => current = ty,
                 &Type::Path(ref path, ..) => {
                     return Some(path.clone());
-                },
+                }
                 &Type::Primitive(..) => {
                     return None;
-                },
+                }
                 &Type::Array(..) => {
                     return None;
-                },
+                }
                 &Type::FuncPtr(..) => {
                     return None;
-                },
+                }
             };
-        };
+        }
     }
 
     pub fn specialize(&self, mappings: &[(&String, &Type)]) -> Type {
         match self {
-            &Type::ConstPtr(ref ty) => {
-                Type::ConstPtr(Box::new(ty.specialize(mappings)))
-            }
-            &Type::Ptr(ref ty) => {
-                Type::Ptr(Box::new(ty.specialize(mappings)))
-            }
+            &Type::ConstPtr(ref ty) => Type::ConstPtr(Box::new(ty.specialize(mappings))),
+            &Type::Ptr(ref ty) => Type::Ptr(Box::new(ty.specialize(mappings))),
             &Type::Path(ref path, ref generic_values) => {
                 for &(param, value) in mappings {
                     if *path == *param {
@@ -283,21 +278,16 @@ impl Type {
                 }
 
                 Type::Path(path.clone(),
-                           generic_values.iter()
-                                         .map(|x| x.specialize(mappings))
-                                         .collect())
+                           generic_values
+                               .iter()
+                               .map(|x| x.specialize(mappings))
+                               .collect())
             }
-            &Type::Primitive(ref primitive) => {
-                Type::Primitive(primitive.clone())
-            }
-            &Type::Array(ref ty, ref size) => {
-                Type::Array(Box::new(ty.specialize(mappings)), *size)
-            }
+            &Type::Primitive(ref primitive) => Type::Primitive(primitive.clone()),
+            &Type::Array(ref ty, ref size) => Type::Array(Box::new(ty.specialize(mappings)), *size),
             &Type::FuncPtr(ref ret, ref args) => {
                 Type::FuncPtr(Box::new(ret.specialize(mappings)),
-                              args.iter()
-                                  .map(|x| x.specialize(mappings))
-                                  .collect())
+                              args.iter().map(|x| x.specialize(mappings)).collect())
             }
         }
     }
@@ -314,7 +304,7 @@ impl Type {
                 *path = mangle::mangle_path(path, generic_values);
                 *generic_values = Vec::new();
             }
-            &mut Type::Primitive(_) => { }
+            &mut Type::Primitive(_) => {}
             &mut Type::Array(ref mut ty, _) => {
                 ty.mangle_paths();
             }
@@ -327,12 +317,13 @@ impl Type {
         }
     }
 
-    pub fn get_items(&self, library: &Library, kind: DependencyKind)
-                     -> Vec<(Item, DependencyKind)>
-    {
+    pub fn get_items(&self,
+                     library: &Library,
+                     kind: DependencyKind)
+                     -> Vec<(Item, DependencyKind)> {
         match *self {
             Type::ConstPtr(ref tpe) |
-            Type::Ptr(ref tpe)  => tpe.get_items(library, DependencyKind::Ptr),
+            Type::Ptr(ref tpe) => tpe.get_items(library, DependencyKind::Ptr),
             Type::Array(ref tpe, _) => tpe.get_items(library, DependencyKind::Normal),
             Type::Primitive(..) => Vec::new(),
             Type::FuncPtr(ref ret, ref args) => {
@@ -344,89 +335,92 @@ impl Type {
             }
             Type::Path(ref path, ref generic_values) => {
                 if let Some(value) = library.resolve_path(path) {
-                     match value {
-                         Item::Struct(s) => {
-                             if s.generic_params.is_empty() {
-                                 vec![(Item::Struct(s), kind)]
-                             } else {
-                                 let mut ret = Vec::new();
-                                 let mappings = s.generic_params.iter()
-                                     .zip(generic_values.iter())
-                                     .collect::<Vec<_>>();
+                    match value {
+                        Item::Struct(s) => {
+                            if s.generic_params.is_empty() {
+                                vec![(Item::Struct(s), kind)]
+                            } else {
+                                let mut ret = Vec::new();
+                                let mappings = s.generic_params
+                                    .iter()
+                                    .zip(generic_values.iter())
+                                    .collect::<Vec<_>>();
 
-                                 let specialized = super::Specialization {
-                                     name: s.name.clone(),
-                                     annotations: s.annotations.clone(),
-                                     generic_params: s.generic_params.clone(),
-                                     documentation: s.documentation.clone(),
-                                     generic_values: generic_values.iter()
-                                         .cloned()
-                                         .map(|mut g| {
-                                             g.mangle_paths();
-                                             g
-                                         })
-                                         .collect(),
-                                 };
+                                let specialized = super::Specialization {
+                                    name: s.name.clone(),
+                                    annotations: s.annotations.clone(),
+                                    generic_params: s.generic_params.clone(),
+                                    documentation: s.documentation.clone(),
+                                    generic_values: generic_values
+                                        .iter()
+                                        .cloned()
+                                        .map(|mut g| {
+                                                 g.mangle_paths();
+                                                 g
+                                             })
+                                        .collect(),
+                                };
 
-                                 let monomorph = super::Struct {
-                                     name: mangle::mangle_path(&s.name, generic_values),
-                                     fields: s.fields.iter()
-                                         .map(|x| x.specialize(&mappings), )
-                                         .collect(),
-                                     generic_params: vec![],
-                                     functions: vec![],
-                                     destructor: None,
-                                     specialization: Some(specialized),
-                                     ..s
-                                 };
-                                 ret.push((Item::Struct(monomorph), kind));
+                                let monomorph = super::Struct {
+                                    name: mangle::mangle_path(&s.name, generic_values),
+                                    fields: s.fields
+                                        .iter()
+                                        .map(|x| x.specialize(&mappings))
+                                        .collect(),
+                                    generic_params: vec![],
+                                    specialization: Some(specialized),
+                                    ..s
+                                };
+                                ret.push((Item::Struct(monomorph), kind));
 
-                                 ret
-                             }
-                         }
-                         Item::Typedef(t) => {
-                             if t.generic_params.is_empty() {
-                                 vec![(Item::Typedef(t), kind)]
-                             } else {
-                                 let mappings = t.generic_params.iter()
-                                     .zip(generic_values.iter())
-                                     .collect::<Vec<_>>();
-                                 let specialized = super::Specialization {
-                                     name: t.name.clone(),
-                                     annotations: t.annotations.clone(),
-                                     generic_params: t.generic_params.clone(),
-                                     documentation: t.documentation.clone(),
-                                     generic_values: generic_values.iter()
-                                         .cloned()
-                                         .map(|mut g| {
-                                             g.mangle_paths();
-                                             g
-                                         })
-                                         .collect(),
-                                 };
-                                 let monomorph = super::Typedef {
-                                     name: mangle::mangle_path(&t.name, generic_values),
-                                     generic_params: vec![],
-                                     aliased: t.aliased.specialize(&mappings),
-                                     specialization: Some(specialized),
-                                     ..t
-                                 };
-                                 vec![(Item::Typedef(monomorph), kind)]
-                             }
-                         }
-                         Item::Opaque(o) => {
-                             if o.generic_params.is_empty() {
-                                 vec![(Item::Opaque(o), kind)]
-                             } else {
-                                 let monomorph = super::OpaqueItem {
-                                     name: mangle::mangle_path(&o.name, generic_values),
-                                     generic_params: vec![],
-                                     ..o
-                                 };
-                                 vec![(Item::Opaque(monomorph), kind)]
-                             }
-                         }
-                         i => vec![(i, kind)],
+                                ret
+                            }
+                        }
+                        Item::Typedef(t) => {
+                            if t.generic_params.is_empty() {
+                                vec![(Item::Typedef(t), kind)]
+                            } else {
+                                let mappings = t.generic_params
+                                    .iter()
+                                    .zip(generic_values.iter())
+                                    .collect::<Vec<_>>();
+                                let specialized = super::Specialization {
+                                    name: t.name.clone(),
+                                    annotations: t.annotations.clone(),
+                                    generic_params: t.generic_params.clone(),
+                                    documentation: t.documentation.clone(),
+                                    generic_values: generic_values
+                                        .iter()
+                                        .cloned()
+                                        .map(|mut g| {
+                                                 g.mangle_paths();
+                                                 g
+                                             })
+                                        .collect(),
+                                };
+                                let monomorph = super::Typedef {
+                                    name: mangle::mangle_path(&t.name, generic_values),
+                                    generic_params: vec![],
+                                    aliased: t.aliased.specialize(&mappings),
+                                    specialization: Some(specialized),
+                                    ..t
+                                };
+                                vec![(Item::Typedef(monomorph), kind)]
+                            }
+                        }
+                        Item::Opaque(o) => {
+                            if o.generic_params.is_empty() {
+                                vec![(Item::Opaque(o), kind)]
+                            } else {
+                                let monomorph = super::OpaqueItem {
+                                    name: mangle::mangle_path(&o.name, generic_values),
+                                    generic_params: vec![],
+                                    ..o
+                                };
+                                vec![(Item::Opaque(monomorph), kind)]
+                            }
+                        }
+                        i => vec![(i, kind)],
                     }
                 } else {
                     Vec::new()
@@ -484,7 +478,7 @@ impl SynFnRetTyHelpers for syn::FunctionRetTy {
                 } else {
                     Ok(Type::Primitive(PrimitiveType::Void))
                 }
-            },
+            }
         }
     }
 }
