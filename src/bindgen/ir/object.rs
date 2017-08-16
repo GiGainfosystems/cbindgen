@@ -153,7 +153,7 @@ impl Source for Class {
         if config.language == Language::Cxx {
             out.write(&format!("struct {}: public intern::{}", self.name, self.inner.name));
             out.open_brace();
-            out.write(&format!("{}({}&& other)", self.name, self.inner.name));
+            out.write(&format!("{}(intern::{}&& other)", self.name, self.inner.name));
             out.open_brace();
             for f in &self.inner.fields {
                 out.write(&format!("this->{0} = other.{0};", f.name));
