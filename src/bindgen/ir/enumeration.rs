@@ -8,10 +8,11 @@ use syn;
 
 use bindgen::annotation::*;
 use bindgen::config::{Config, Language};
+use bindgen::ir::Documentation;
 use bindgen::rename::*;
 use bindgen::utilities::*;
 use bindgen::writer::*;
-use bindgen::ir::Documentation;
+use syn::punctuated::Punctuated;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Repr {
@@ -32,19 +33,20 @@ pub struct Enum {
 }
 
 impl Enum {
-    pub fn load(name: String,
-                repr: Repr,
-                annotations: AnnotationSet,
-                variants: &Vec<syn::Variant>,
-                doc: String) -> Result<Enum, String>
-    {
-        if repr != Repr::U32 &&
-           repr != Repr::U16 &&
-           repr != Repr::U8 {
+    pub fn load(
+        name: String,
+        repr: Repr,
+        annotations: AnnotationSet,
+        variants: &Punctuated<syn::Variant, syn::Token![,]>,
+        doc: String,
+    ) -> Result<Enum, String> {
+        if repr != Repr::U32 && repr != Repr::U16 && repr != Repr::U8 {
             return if repr == Repr::C {
                 Err(format!("repr(C) is not FFI safe for enums"))
             } else {
-                Err(format!("enum not marked with a repr(u32) or repr(u16) or repr(u8)"))
+                Err(format!(
+                    "enum not marked with a repr(u32) or repr(u16) or repr(u8)"
+                ))
             };
         }
 
@@ -52,11 +54,17 @@ impl Enum {
         let mut current = 0;
 
         for variant in variants {
-            match variant.data {
-                syn::VariantData::Unit => {
-                    match variant.discriminant {
-                        Some(syn::ConstExpr::Lit(syn::Lit::Int(i, _))) => {
-                            current = i;
+            match variant.fields {
+                syn::Fields::Unit => {
+                    match &variant.discriminant {
+                        Some((
+                            _,
+                            syn::Expr::Lit(syn::ExprLit {
+                                lit: syn::Lit::Int(i),
+                                ..
+                            }),
+                        )) => {
+                            current = i.base10_parse().map_err(|e| ToString::to_string(&e))?;
                         }
                         Some(_) => {
                             return Err(format!("unsupported discriminant"));
@@ -64,7 +72,11 @@ impl Enum {
                         None => { /* okay, we just use current */ }
                     }
 
-                    values.push((variant.ident.to_string(), current, Documentation::load(variant.get_doc_attr())));
+                    values.push((
+                        variant.ident.to_string(),
+                        current,
+                        Documentation::load(variant.get_doc_attr()),
+                    ));
                     current = current + 1;
                 }
                 _ => {
@@ -90,25 +102,33 @@ impl Enum {
     }
 
     pub fn rename_fields(&mut self, config: &Config) {
-        if config.enumeration.prefix_with_name ||
-           self.annotations.bool("prefix-with-name").unwrap_or(false)
+        if config.enumeration.prefix_with_name
+            || self.annotations.bool("prefix-with-name").unwrap_or(false)
         {
             let old = ::std::mem::replace(&mut self.values, Vec::new());
             for (name, value, doc) in old {
-                self.values.push((format!("{}_{}", self.name, name), value, doc));
+                self.values
+                    .push((format!("{}_{}", self.name, name), value, doc));
             }
         }
 
-        let rules = [self.annotations.parse_atom::<RenameRule>("rename-all"),
-                     config.enumeration.rename_variants];
+        let rules = [
+            self.annotations.parse_atom::<RenameRule>("rename-all"),
+            config.enumeration.rename_variants,
+        ];
 
         if let Some(r) = find_first_some(&rules) {
-            self.values = self.values.iter()
-                                     .map(|x| (r.apply_to_pascal_case(&x.0,
-                                                                      IdentifierType::EnumVariant(self)),
-                                               x.1.clone(),
-                                               x.2.clone()))
-                                     .collect();
+            self.values = self
+                .values
+                .iter()
+                .map(|x| {
+                    (
+                        r.apply_to_pascal_case(&x.0, IdentifierType::EnumVariant(self)),
+                        x.1.clone(),
+                        x.2.clone(),
+                    )
+                })
+                .collect();
         }
     }
 }

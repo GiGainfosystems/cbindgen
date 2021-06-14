@@ -2,18 +2,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use std::io::Write;
 use std::fmt;
+use std::io::Write;
 
 use syn;
 
 use bindgen::cdecl;
 use bindgen::config::Config;
+use bindgen::dependency_graph::{DependencyKind, Item};
 use bindgen::library::*;
+use bindgen::mangle;
 use bindgen::utilities::*;
 use bindgen::writer::*;
-use bindgen::dependency_graph::{Item, DependencyKind};
-use bindgen::mangle;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PrimitiveType {
@@ -171,35 +171,37 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn load(ty: &syn::Ty) -> Result<Option<Type>, String> {
+    pub fn load(ty: &syn::Type) -> Result<Option<Type>, String> {
         let converted = match ty {
-            &syn::Ty::Rptr(_, ref mut_ty) => {
-                let converted = Type::load(&mut_ty.ty)?;
+            &syn::Type::Reference(ref mut_ty) => {
+                let converted = Type::load(&mut_ty.elem)?;
 
                 let converted = match converted {
                     Some(converted) => converted,
                     None => return Err(format!("cannot have a pointer to a zero sized type")),
                 };
 
-                match mut_ty.mutability {
-                    syn::Mutability::Mutable => Type::Ptr(Box::new(converted)),
-                    syn::Mutability::Immutable => Type::ConstPtr(Box::new(converted)),
+                if mut_ty.mutability.is_some() {
+                    Type::Ptr(Box::new(converted))
+                } else {
+                    Type::ConstPtr(Box::new(converted))
                 }
             }
-            &syn::Ty::Ptr(ref mut_ty) => {
-                let converted = Type::load(&mut_ty.ty)?;
+            &syn::Type::Ptr(ref mut_ty) => {
+                let converted = Type::load(&mut_ty.elem)?;
 
                 let converted = match converted {
                     Some(converted) => converted,
                     None => return Err(format!("cannot have a pointer to a zero sized type")),
                 };
 
-                match mut_ty.mutability {
-                    syn::Mutability::Mutable => Type::Ptr(Box::new(converted)),
-                    syn::Mutability::Immutable => Type::ConstPtr(Box::new(converted)),
+                if mut_ty.mutability.is_some() {
+                    Type::Ptr(Box::new(converted))
+                } else {
+                    Type::ConstPtr(Box::new(converted))
                 }
             }
-            &syn::Ty::Path(_, ref path) => {
+            &syn::Type::Path(ref path) => {
                 let (name, generics) = path.convert_to_generic_single_segment()?;
 
                 if name == "PhantomData" {
@@ -215,9 +217,18 @@ impl Type {
                     Type::Path(name, generics)
                 }
             }
-            &syn::Ty::Array(ref ty, syn::ConstExpr::Lit(syn::Lit::Int(size, _))) => {
-                let converted = Type::load(ty)?;
-
+            &syn::Type::Array(ref ty) => {
+                let converted = Type::load(&ty.elem)?;
+                let size: u64 = match ty.len {
+                    syn::Expr::Lit(ref lit) => {
+                        if let syn::Lit::Int(ref i) = lit.lit {
+                            i.base10_parse().map_err(|_| "Failed to parse array size")?
+                        } else {
+                            panic!("Only integer expressions are allowed here");
+                        }
+                    }
+                    _ => unimplemented!(),
+                };
                 let converted = match converted {
                     Some(converted) => converted,
                     None => return Err(format!("cannot have an array of zero sized types")),
@@ -225,14 +236,14 @@ impl Type {
 
                 Type::Array(Box::new(converted), size)
             }
-            &syn::Ty::BareFn(ref function) => {
+            &syn::Type::BareFn(ref function) => {
                 let args = function.inputs.iter().try_skip_map(|x| Type::load(&x.ty))?;
                 let ret = function.output.as_type()?;
 
                 Type::FuncPtr(Box::new(ret), args)
             }
-            &syn::Ty::Tup(ref fields) => {
-                if fields.len() == 0 {
+            &syn::Type::Tuple(ref fields) => {
+                if fields.elems.len() == 0 {
                     return Ok(None);
                 }
                 return Err(format!("tuples are not supported as types"));
@@ -277,18 +288,20 @@ impl Type {
                     }
                 }
 
-                Type::Path(path.clone(),
-                           generic_values
-                               .iter()
-                               .map(|x| x.specialize(mappings))
-                               .collect())
+                Type::Path(
+                    path.clone(),
+                    generic_values
+                        .iter()
+                        .map(|x| x.specialize(mappings))
+                        .collect(),
+                )
             }
             &Type::Primitive(ref primitive) => Type::Primitive(primitive.clone()),
             &Type::Array(ref ty, ref size) => Type::Array(Box::new(ty.specialize(mappings)), *size),
-            &Type::FuncPtr(ref ret, ref args) => {
-                Type::FuncPtr(Box::new(ret.specialize(mappings)),
-                              args.iter().map(|x| x.specialize(mappings)).collect())
-            }
+            &Type::FuncPtr(ref ret, ref args) => Type::FuncPtr(
+                Box::new(ret.specialize(mappings)),
+                args.iter().map(|x| x.specialize(mappings)).collect(),
+            ),
         }
     }
 
@@ -317,13 +330,15 @@ impl Type {
         }
     }
 
-    pub fn get_items(&self,
-                     library: &Library,
-                     kind: DependencyKind)
-                     -> Vec<(Item, DependencyKind)> {
+    pub fn get_items(
+        &self,
+        library: &Library,
+        kind: DependencyKind,
+    ) -> Vec<(Item, DependencyKind)> {
         match *self {
-            Type::ConstPtr(ref tpe) |
-            Type::Ptr(ref tpe) => tpe.get_items(library, DependencyKind::Ptr),
+            Type::ConstPtr(ref tpe) | Type::Ptr(ref tpe) => {
+                tpe.get_items(library, DependencyKind::Ptr)
+            }
             Type::Array(ref tpe, _) => tpe.get_items(library, DependencyKind::Normal),
             Type::Primitive(..) => Vec::new(),
             Type::FuncPtr(ref ret, ref args) => {
@@ -341,7 +356,8 @@ impl Type {
                                 vec![(Item::Struct(s), kind)]
                             } else {
                                 let mut ret = Vec::new();
-                                let mappings = s.generic_params
+                                let mappings = s
+                                    .generic_params
                                     .iter()
                                     .zip(generic_values.iter())
                                     .collect::<Vec<_>>();
@@ -355,15 +371,16 @@ impl Type {
                                         .iter()
                                         .cloned()
                                         .map(|mut g| {
-                                                 g.mangle_paths();
-                                                 g
-                                             })
+                                            g.mangle_paths();
+                                            g
+                                        })
                                         .collect(),
                                 };
 
                                 let monomorph = super::Struct {
                                     name: mangle::mangle_path(&s.name, generic_values),
-                                    fields: s.fields
+                                    fields: s
+                                        .fields
                                         .iter()
                                         .map(|x| x.specialize(&mappings))
                                         .collect(),
@@ -380,7 +397,8 @@ impl Type {
                             if t.generic_params.is_empty() {
                                 vec![(Item::Typedef(t), kind)]
                             } else {
-                                let mappings = t.generic_params
+                                let mappings = t
+                                    .generic_params
                                     .iter()
                                     .zip(generic_values.iter())
                                     .collect::<Vec<_>>();
@@ -393,9 +411,9 @@ impl Type {
                                         .iter()
                                         .cloned()
                                         .map(|mut g| {
-                                                 g.mangle_paths();
-                                                 g
-                                             })
+                                            g.mangle_paths();
+                                            g
+                                        })
                                         .collect(),
                                 };
                                 let monomorph = super::Typedef {
@@ -468,11 +486,11 @@ pub trait SynFnRetTyHelpers {
     fn as_type(&self) -> Result<Type, String>;
 }
 
-impl SynFnRetTyHelpers for syn::FunctionRetTy {
+impl SynFnRetTyHelpers for syn::ReturnType {
     fn as_type(&self) -> Result<Type, String> {
         match self {
-            &syn::FunctionRetTy::Default => Ok(Type::Primitive(PrimitiveType::Void)),
-            &syn::FunctionRetTy::Ty(ref t) => {
+            &syn::ReturnType::Default => Ok(Type::Primitive(PrimitiveType::Void)),
+            &syn::ReturnType::Type(_, ref t) => {
                 if let Some(x) = Type::load(t)? {
                     Ok(x)
                 } else {

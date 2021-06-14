@@ -21,6 +21,7 @@ use bindgen::writer::{Source, SourceWriter};
 
 use bindgen::dependency_graph::Item;
 pub use bindgen::dependency_graph::DependencyList;
+use syn::punctuated::Punctuated;
 
 /// A path ref is used to reference a path value
 pub type PathRef = String;
@@ -114,26 +115,21 @@ impl Library {
 
     fn load_syn_crate_mod(&mut self, crate_name: &str, items: &Vec<syn::Item>) {
         for item in items {
-            match item.node {
-                syn::ItemKind::ForeignMod(ref block) => {
+            match item {
+                syn::Item::ForeignMod(ref block) => {
                     self.load_syn_foreign_mod(crate_name, item, block);
                 }
-                syn::ItemKind::Fn(ref decl,
-                                  ref _unsafe,
-                                  ref _const,
-                                  ref abi,
-                                  ref _generic,
-                                  ref _block) => {
-                    self.load_syn_fn(crate_name, item, decl, abi);
+                syn::Item::Fn(function) => {
+                    self.load_syn_fn(crate_name, function, &function.sig);
                 }
-                syn::ItemKind::Struct(ref variant, ref generics) => {
-                    self.load_syn_struct(crate_name, item, variant, generics);
+                syn::Item::Struct(ref variant) => {
+                    self.load_syn_struct(crate_name, variant, &variant.fields, &variant.generics);
                 }
-                syn::ItemKind::Enum(ref variants, ref generics) => {
-                    self.load_syn_enum(crate_name, item, variants, generics);
+                syn::Item::Enum(ref variants) => {
+                    self.load_syn_enum(crate_name, variants, &variants.variants, &variants.generics);
                 }
-                syn::ItemKind::Ty(ref ty, ref generics) => {
-                    self.load_syn_ty(crate_name, item, ty, generics);
+                syn::Item::Type(ref ty) => {
+                    self.load_syn_ty(crate_name, ty, &ty.ty, &ty.generics);
                 }
                 _ => {}
             }
@@ -143,26 +139,25 @@ impl Library {
     /// Enters a `extern "C" { }` declaration and loads function declarations.
     fn load_syn_foreign_mod(&mut self,
                             crate_name: &str,
-                            item: &syn::Item,
-                            block: &syn::ForeignMod) {
+                            _item: &syn::Item,
+                            block: &syn::ItemForeignMod) {
         if !block.abi.is_c() {
-            info!("skip {}::{} - (extern block must be extern C)",
-                  crate_name,
-                  &item.ident);
+            info!("skip {} - (extern block must be extern C)",
+                  crate_name);
             return;
         }
 
         for foreign_item in &block.items {
-            match foreign_item.node {
-                syn::ForeignItemKind::Fn(ref decl, ref _generic) => {
+            match foreign_item {
+                syn::ForeignItem::Fn(ref decl) => {
                     if crate_name != self.bindings_crate_name {
                         info!("skip {}::{} - (fn's outside of the binding crate are not used)",
                               crate_name,
-                              &foreign_item.ident);
+                              &decl.sig.ident);
                         return;
                     }
 
-                    let annotations = match AnnotationSet::parse(foreign_item.get_doc_attr()) {
+                    let annotations = match AnnotationSet::parse(decl.get_doc_attr()) {
                         Ok(x) => x,
                         Err(msg) => {
                             warn!("{}", msg);
@@ -170,20 +165,20 @@ impl Library {
                         }
                     };
 
-                    match Function::load(foreign_item.ident.to_string(),
+                    match Function::load(decl.sig.ident.to_string(),
                                          annotations,
-                                         decl,
+                                         &decl.sig,
                                          true,
-                                         foreign_item.get_doc_attr()) {
+                                         decl.get_doc_attr()) {
                         Ok(func) => {
-                            info!("take {}::{}", crate_name, &foreign_item.ident);
+                            info!("take {}::{}", crate_name, &decl.sig.ident);
 
                             self.functions.push(func);
                         }
                         Err(msg) => {
                             error!("Cannot use fn {}::{} ({})",
                                    crate_name,
-                                   &foreign_item.ident,
+                                   &decl.sig.ident,
                                    msg);
                         }
                     }
@@ -196,17 +191,17 @@ impl Library {
     /// Loads a `fn` declaration
     fn load_syn_fn(&mut self,
                    crate_name: &str,
-                   item: &syn::Item,
-                   decl: &syn::FnDecl,
-                   abi: &Option<syn::Abi>) {
+                   item: &syn::ItemFn,
+                   function_sig: &syn::Signature
+    ) {
         if crate_name != self.bindings_crate_name {
             info!("skip {}::{} - (fn's outside of the binding crate are not used)",
                   crate_name,
-                  &item.ident);
+                  &function_sig.ident);
             return;
         }
 
-        if item.is_no_mangle() && abi.is_c() {
+        if item.is_no_mangle() && function_sig.abi.is_c() {
             let annotations = match AnnotationSet::parse(item.get_doc_attr()) {
                 Ok(x) => x,
                 Err(msg) => {
@@ -215,25 +210,25 @@ impl Library {
                 }
             };
 
-            match Function::load(item.ident.to_string(),
+            match Function::load(function_sig.ident.to_string(),
                                  annotations,
-                                 decl,
+                                 function_sig,
                                  false,
                                  item.get_doc_attr()) {
                 Ok(func) => {
-                    info!("take {}::{}", crate_name, &item.ident);
+                    info!("take {}::{}", crate_name, &function_sig.ident);
 
                     self.functions.push(func);
                 }
                 Err(msg) => {
-                    error!("cannot use fn {}::{} ({})", crate_name, &item.ident, msg);
+                    error!("cannot use fn {}::{} ({})", crate_name, &function_sig.ident, msg);
                 }
             }
         } else {
-            if item.is_no_mangle() != abi.is_c() {
+            if item.is_no_mangle() != function_sig.abi.is_c() {
                 warn!("skip {}::{} - (not both `no_mangle` and `extern \"C\"`)",
                       crate_name,
-                      &item.ident);
+                      &function_sig.ident);
             }
         }
     }
@@ -241,8 +236,8 @@ impl Library {
     /// Loads a `struct` declaration
     fn load_syn_struct(&mut self,
                        crate_name: &str,
-                       item: &syn::Item,
-                       variant: &syn::VariantData,
+                       item: &syn::ItemStruct,
+                       variant: &syn::Fields,
                        generics: &syn::Generics) {
         let struct_name = item.ident.to_string();
         let annotations = match AnnotationSet::parse(item.get_doc_attr()) {
@@ -286,11 +281,11 @@ impl Library {
     /// Loads a `enum` declaration
     fn load_syn_enum(&mut self,
                      crate_name: &str,
-                     item: &syn::Item,
-                     variants: &Vec<syn::Variant>,
+                     item: &syn::ItemEnum,
+                     variants: &Punctuated<syn::Variant, syn::Token![,]>,
                      generics: &syn::Generics) {
-        if !generics.lifetimes.is_empty() || !generics.ty_params.is_empty() ||
-           !generics.where_clause.predicates.is_empty() {
+        if !generics.params.is_empty() ||
+           generics.where_clause.is_some() {
             info!("skip {}::{} - (has generics or lifetimes or where bounds)",
                   crate_name,
                   &item.ident);
@@ -327,8 +322,8 @@ impl Library {
     /// Loads a `type` declaration
     fn load_syn_ty(&mut self,
                    crate_name: &str,
-                   item: &syn::Item,
-                   ty: &syn::Ty,
+                   item: &syn::ItemType,
+                   ty: &syn::Type,
                    generics: &syn::Generics) {
         let alias_name = item.ident.to_string();
         let annotations = match AnnotationSet::parse(item.get_doc_attr()) {

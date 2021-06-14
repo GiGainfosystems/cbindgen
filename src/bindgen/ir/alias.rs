@@ -115,16 +115,21 @@ impl Typedef {
     pub fn load(name: String,
                 annotations: AnnotationSet,
                 generics: &syn::Generics,
-                ty: &syn::Ty,
+                ty: &syn::Type,
                 doc: String)
                 -> Result<Typedef, String> {
         if let Some(x) = Type::load(ty)? {
             match ty {
-                &syn::Ty::Path(_, ref p) => {
+                &syn::Type::Path(ref p) => {
                    let generic_params = generics
-                        .ty_params
+                        .params
                         .iter()
-                        .map(|x| x.ident.to_string())
+                        .map(|x| match x {
+                            syn::GenericParam::Type(t) => {
+                                t.ident.to_string()
+                            }
+                            _ => unimplemented!("Only types allowed here"),
+                        })
                         .collect::<Vec<_>>();
 
                     let (_, generic_values) = p.convert_to_generic_single_segment()?;
@@ -138,8 +143,7 @@ impl Typedef {
                         specialization: None,
                     })
                 }
-                _ if generics.ty_params.is_empty() &&
-                    generics.lifetimes.is_empty() => {
+                _ if generics.params.is_empty() => {
                     Ok(Typedef {
                         name: name,
                         annotations: annotations,
@@ -150,8 +154,7 @@ impl Typedef {
                         specialization: None,
                     })
                 }
-                i => {
-                    println!("{:?}", i);
+                _i => {
                     unimplemented!()
                 }
             }

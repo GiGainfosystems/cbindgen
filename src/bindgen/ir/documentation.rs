@@ -15,7 +15,7 @@ pub struct Documentation {
 impl Documentation {
     pub fn load(doc: String) -> Self {
         let doc = doc.lines().filter_map(|x|{
-            let x = x.trim_left_matches("///");
+            let x = x.trim_start_matches("///");
             if x.trim().starts_with("cbindgen:") {
                 None
             } else {

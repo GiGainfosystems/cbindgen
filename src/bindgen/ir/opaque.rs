@@ -4,7 +4,7 @@
 
 use std::io::Write;
 
-use syn;
+use syn::{self, GenericParam};
 
 use bindgen::annotation::*;
 use bindgen::config::{Config, Language};
@@ -21,13 +21,20 @@ pub struct OpaqueItem {
 }
 
 impl OpaqueItem {
-    pub fn new(name: String,
-               generics: &syn::Generics,
-               annotations: AnnotationSet,
-               doc: String) -> OpaqueItem {
-        let generic_params = generics.ty_params.iter()
-                                               .map(|x| x.ident.to_string())
-                                               .collect::<Vec<_>>();
+    pub fn new(
+        name: String,
+        generics: &syn::Generics,
+        annotations: AnnotationSet,
+        doc: String,
+    ) -> OpaqueItem {
+        let generic_params = generics
+            .params
+            .iter()
+            .map(|x| match x {
+                GenericParam::Type(x) => x.ident.to_string(),
+                _ => unimplemented!("Only types allowed here"),
+            })
+            .collect::<Vec<_>>();
 
         OpaqueItem {
             name: name,

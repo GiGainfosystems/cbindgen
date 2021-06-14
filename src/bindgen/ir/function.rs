@@ -38,7 +38,7 @@ pub struct Function {
 impl Function {
     pub fn load(name: String,
                 annotations: AnnotationSet,
-                decl: &syn::FnDecl,
+                decl: &syn::Signature,
                 extern_decl: bool,
                 doc: String)
                 -> Result<Function, String> {
@@ -250,9 +250,21 @@ pub trait SynFnArgHelpers {
 impl SynFnArgHelpers for syn::FnArg {
     fn as_ident_and_type(&self) -> Result<Option<(String, Type)>, String> {
         match self {
-            &syn::FnArg::Captured(syn::Pat::Ident(_, ref ident, _), ref ty) => {
-                if let Some(x) = Type::load(ty)? {
-                    Ok(Some((ident.to_string(), x)))
+            &syn::FnArg::Typed(ref tpe) => {
+                if let Some(x) = Type::load(&tpe.ty)? {
+                    match &*tpe.pat {
+                        syn::Pat::Path(path) => {
+                            if let Some(ident) = path.path.get_ident() {
+                                Ok(Some((ident.to_string(), x)))
+                            } else {
+                                Err(format!("Invalid path: {:?}", path.path))
+                            }
+                        }
+                        syn::Pat::Ident(ident) => {
+                            Ok(Some((ident.ident.to_string(), x)))
+                        }
+                        _ => Err(format!("Unexpected paramater format for {:?}", tpe)),
+                    }
                 } else {
                     Ok(None)
                 }

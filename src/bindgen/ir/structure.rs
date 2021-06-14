@@ -2,20 +2,20 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use std::io::Write;
 use std::fmt::{self, Display};
+use std::io::Write;
 
-use syn;
+use syn::{self, GenericParam};
 
 use bindgen::annotation::*;
-use bindgen::dependency_graph::{Item, DependencyKind};
+use bindgen::cdecl;
 use bindgen::config::{Config, Language};
+use bindgen::dependency_graph::{DependencyKind, Item};
 use bindgen::ir::*;
 use bindgen::library::*;
 use bindgen::rename::*;
 use bindgen::utilities::*;
 use bindgen::writer::*;
-use bindgen::cdecl;
 
 #[derive(Debug, Clone)]
 pub struct StructField {
@@ -58,49 +58,53 @@ impl Display for Struct {
 }
 
 impl Struct {
-    pub fn load(name: String,
-                annotations: AnnotationSet,
-                decl: &syn::VariantData,
-                generics: &syn::Generics,
-                doc: String)
-                -> Result<Struct, String> {
+    pub fn load(
+        name: String,
+        annotations: AnnotationSet,
+        decl: &syn::Fields,
+        generics: &syn::Generics,
+        doc: String,
+    ) -> Result<Struct, String> {
         let fields = match decl {
-            &syn::VariantData::Struct(ref fields) => {
-                fields.iter().try_skip_map(|x| x.as_struct_field())?
+            &syn::Fields::Named(ref fields) => {
+                fields.named.iter().try_skip_map(|x| x.as_struct_field())?
             }
-            &syn::VariantData::Tuple(ref fields) => {
+            &syn::Fields::Unnamed(ref fields) => {
                 let mut out = Vec::new();
                 let mut current = 0;
-                for field in fields {
+                for field in &fields.unnamed {
                     if let Some(tpe) = Type::load(&field.ty)? {
                         out.push(StructField {
-                                     name: format!("_{}", current),
-                                     tpe,
-                                     doc: Documentation::load(field.get_doc_attr()),
-                                 });
+                            name: format!("_{}", current),
+                            tpe,
+                            doc: Documentation::load(field.get_doc_attr()),
+                        });
                         current += 1;
                     }
                 }
                 out
             }
-            &syn::VariantData::Unit => vec![],
+            &syn::Fields::Unit => vec![],
         };
 
         let generic_params = generics
-            .ty_params
+            .params
             .iter()
-            .map(|x| x.ident.to_string())
+            .map(|x| match x {
+                GenericParam::Type(x) => x.ident.to_string(),
+                _ => unimplemented!("Only types allowed here"),
+            })
             .collect::<Vec<_>>();
 
         Ok(Struct {
-               name: name,
-               annotations: annotations,
-               fields: fields,
-               generic_params: generic_params,
-               documentation: Documentation::load(doc),
-               specialization: None,
-               intern: false,
-           })
+            name: name,
+            annotations: annotations,
+            fields: fields,
+            generic_params: generic_params,
+            documentation: Documentation::load(doc),
+            specialization: None,
+            intern: false,
+        })
     }
 
     pub fn as_opaque(&self) -> OpaqueItem {
@@ -124,8 +128,10 @@ impl Struct {
     }
 
     pub fn rename_fields(&mut self, config: &Config) {
-        let rules = [self.annotations.parse_atom::<RenameRule>("rename-all"),
-                     config.structure.rename_fields];
+        let rules = [
+            self.annotations.parse_atom::<RenameRule>("rename-all"),
+            config.structure.rename_fields,
+        ];
 
         if let Some(o) = self.annotations.list("field-names") {
             let mut overriden_fields = Vec::<StructField>::new();
@@ -135,22 +141,21 @@ impl Struct {
                     overriden_fields.push((*s).clone());
                 } else {
                     overriden_fields.push(StructField {
-                                              name: o[i].clone(),
-                                              ..(*s).clone()
-                                          });
+                        name: o[i].clone(),
+                        ..(*s).clone()
+                    });
                 }
             }
 
             self.fields = overriden_fields;
         } else if let Some(r) = find_first_some(&rules) {
-            self.fields = self.fields
+            self.fields = self
+                .fields
                 .iter()
-                .map(|x| {
-                         StructField {
-                             name: r.apply_to_snake_case(&x.name, IdentifierType::StructMember),
-                             ..x.clone()
-                         }
-                     })
+                .map(|x| StructField {
+                    name: r.apply_to_snake_case(&x.name, IdentifierType::StructMember),
+                    ..x.clone()
+                })
                 .collect();
         }
     }
@@ -161,8 +166,6 @@ impl Struct {
         }
     }
 }
-
-
 
 impl Source for Struct {
     fn write<F: Write>(&self, config: &Config, out: &mut SourceWriter<F>) {
@@ -191,14 +194,14 @@ impl Source for Struct {
     }
 }
 
-
 pub trait SynFieldHelpers {
     fn as_struct_field(&self) -> Result<Option<StructField>, String>;
 }
 
 impl SynFieldHelpers for syn::Field {
     fn as_struct_field(&self) -> Result<Option<StructField>, String> {
-        let ident = self.ident
+        let ident = self
+            .ident
             .as_ref()
             .ok_or(format!("field is missing identifier"))?
             .clone();
@@ -206,10 +209,10 @@ impl SynFieldHelpers for syn::Field {
 
         if let Some(tpe) = converted_ty {
             Ok(Some(StructField {
-                        name: ident.to_string(),
-                        tpe,
-                        doc: Documentation::load(self.get_doc_attr()),
-                    }))
+                name: ident.to_string(),
+                tpe,
+                doc: Documentation::load(self.get_doc_attr()),
+            }))
         } else {
             Ok(None)
         }

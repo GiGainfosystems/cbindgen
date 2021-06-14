@@ -25,8 +25,8 @@ toml = "0.3"
 petgraph = "0.4"
 
 [dependencies.syn]
-version = "0.11"
-features = ["full"]
+version = "1"
+features = ["full", "extra-traits"]
 
 [[bin]]
 name = "cbindgen"

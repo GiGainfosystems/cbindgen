@@ -47,7 +47,7 @@ impl AnnotationSet {
         let mut annotations = HashMap::new();
 
         // Look at each line for an annotation
-        for line in text.lines().map(|x| x.trim_left_matches("///").trim()) {
+        for line in text.lines().map(|x| x.trim_start_matches("///").trim()) {
             // Skip lines that don't start with cbindgen
             if !line.starts_with("cbindgen:") {
                 continue;
