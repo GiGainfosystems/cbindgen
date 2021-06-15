@@ -33,7 +33,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "syn 1.0.73",
+ "syn",
  "tempdir",
  "toml",
 ]
@@ -55,12 +55,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dtoa"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80c8b71fd71146990a9742fc06dcbbde19161a267e0ad4e572c35162f4578c90"
-
-[[package]]
 name = "fixedbitset"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -68,9 +62,9 @@ checksum = "b0cb3d75726fa0c5ed3dce5dfcf0796affa2a60b33967f45012d86fb95a886f2"
 
 [[package]]
 name = "itoa"
-version = "0.3.1"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb2f404fbc66fd9aac13e998248505e7ecb2ad8e44ab6388684c5fb11c6c251c"
+checksum = "dd25036021b0de88a0aff6b850051563c6516d0bf53f8638938edbb9de732736"
 
 [[package]]
 name = "kernel32-sys"
@@ -95,12 +89,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5141eca02775a762cc6cd564d8d2c50f67c0ea3a372cbf1c51592b3e029e10ad"
 
 [[package]]
-name = "num-traits"
-version = "0.1.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1cbfa3781f3fe73dc05321bed52a06d2d491eaa764c52335cf4399f046ece99"
-
-[[package]]
 name = "ordermap"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -122,14 +110,8 @@ version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0d8caf72986c1a598726adc988bb5984792ef84f5ee5aa50209145ee8077038"
 dependencies = [
- "unicode-xid 0.2.2",
+ "unicode-xid",
 ]
-
-[[package]]
-name = "quote"
-version = "0.3.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a6e920b65c65f10b2ae65c831a81a073a89edd28c7cce89475bff467ab4167a"
 
 [[package]]
 name = "quote"
@@ -150,40 +132,36 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde"
-version = "0.9.15"
+name = "ryu"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34b623917345a631dc9608d5194cc206b3fe6c3554cd1c75b937e55e285254af"
+checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
 
 [[package]]
-name = "serde_codegen_internals"
-version = "0.14.2"
+name = "serde"
+version = "1.0.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc888bd283bd2420b16ad0d860e35ad8acb21941180a83a189bb2046f9d00400"
-dependencies = [
- "syn 0.11.11",
-]
+checksum = "ec7505abeacaec74ae4778d9d9328fe5a5d04253220a85c4ee022239fc996d03"
 
 [[package]]
 name = "serde_derive"
-version = "0.9.15"
+version = "1.0.126"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "978fd866f4d4872084a81ccc35e275158351d3b9fe620074e7d7504b816b74ba"
+checksum = "963a7dbc9895aeac7ac90e74f34a5d5261828f79df35cbed41e10189d3804d43"
 dependencies = [
- "quote 0.3.15",
- "serde_codegen_internals",
- "syn 0.11.11",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
 name = "serde_json"
-version = "0.9.10"
+version = "1.0.64"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad8bcf487be7d2e15d3d543f04312de991d631cfe1b43ea0ade69e6a8a5b16a1"
+checksum = "799e97dc9fdae36a5c8b8f2cae9ce2ee9fdce2058c57a93e6099d919fd982f79"
 dependencies = [
- "dtoa",
  "itoa",
- "num-traits",
+ "ryu",
  "serde",
 ]
 
@@ -195,33 +173,13 @@ checksum = "b4d15c810519a91cf877e7e36e63fe068815c678181439f2f29e2562147c3694"
 
 [[package]]
 name = "syn"
-version = "0.11.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3b891b9015c88c576343b9b3e41c2c11a51c219ef067b264bd9c8aa9b441dad"
-dependencies = [
- "quote 0.3.15",
- "synom",
- "unicode-xid 0.0.4",
-]
-
-[[package]]
-name = "syn"
 version = "1.0.73"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f71489ff30030d2ae598524f61326b902466f72a0fb1a8564c001cc63425bcc7"
 dependencies = [
  "proc-macro2",
- "quote 1.0.9",
- "unicode-xid 0.2.2",
-]
-
-[[package]]
-name = "synom"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a393066ed9010ebaed60b9eafa373d4b1baac186dd7e008555b0f702b51945b6"
-dependencies = [
- "unicode-xid 0.0.4",
+ "quote",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -246,9 +204,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.3.2"
+version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd86ad9ebee246fdedd610e0f6d0587b754a3d81438db930a244d0480ed7878f"
+checksum = "a31142970826733df8241ef35dc040ef98c679ab14d7c3e54d827099b3acecaa"
 dependencies = [
  "serde",
 ]
@@ -264,12 +222,6 @@ name = "unicode-width"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf3a113775714a22dcb774d8ea3655c53a32debae63a063acc00a91cc586245f"
-
-[[package]]
-name = "unicode-xid"
-version = "0.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c1f860d7d29cf02cb2f3f359fd35991af3d30bac52c57d265a3c461074cb4dc"
 
 [[package]]
 name = "unicode-xid"
